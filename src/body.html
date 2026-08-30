@@ -1,0 +1,156 @@
+</head>
+<body>
+
+<div id="loader">
+  <div class="ring"></div>
+  <div id="loader-name"></div>
+  <div id="loader-track"><div id="loader-bar"></div></div>
+</div>
+
+<header>
+  <div class="logo">
+    <div class="logo-mark">✦</div>
+    <div>
+      <h1>Gemini Enterprise — דוח שימוש</h1>
+      <p>יומני פעילות משתמשים · Cloud Logging</p>
+    </div>
+  </div>
+  <div class="hdr-btns">
+    <button class="btn btn-icon" onclick="toggleTheme()" title="החלף ערכת נושא" id="btn-theme">🌙</button>
+    <button class="btn btn-icon" onclick="openHelp()" title="עזרה — איך להוציא את הלוגים">?</button>
+    <input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" onchange="handleFiles(this.files)"/>
+    <button class="btn" onclick="document.getElementById('file-input').click()">⬆ טעינת קבצים</button>
+    <button class="btn" onclick="exportViewCSV()">⬇ CSV</button>
+    <button class="btn btn-primary" onclick="exportPNG()">↓ ייצוא PNG</button>
+  </div>
+</header>
+
+<main>
+
+  <div id="upload-zone" onclick="document.getElementById('file-input').click()"
+       ondragover="dz(event,1)" ondragleave="dz(event,0)" ondrop="dzDrop(event)">
+    <div style="font-size:36px;margin-bottom:12px">✦</div>
+    <h2>גרור לכאן את יומני ה-Gemini Enterprise</h2>
+    <p>ייצוא CSV/TSV מ-Cloud Logging (Log Explorer → Download)</p>
+    <div class="hint">
+      נתמכים: <b>gen_ai.client.inference.operation.details</b> (שיחות) · <b>ModelArmorAudit</b> (סינון בטיחות)<br>
+      אפשר להעלות כמה קבצים יחד — הם ימוזגו לפי מזהה שיחה.
+    </div>
+  </div>
+
+  <div id="controls">
+    <span class="ctrl-label">רזולוציה</span>
+    <div class="segs">
+      <button class="seg" data-g="minute" onclick="setGran('minute')">דקות</button>
+      <button class="seg" data-g="hour"   onclick="setGran('hour')">שעות</button>
+      <button class="seg on" data-g="day" onclick="setGran('day')">ימים</button>
+      <button class="seg" data-g="week"   onclick="setGran('week')">שבועות</button>
+      <button class="seg" data-g="month"  onclick="setGran('month')">חודשים</button>
+    </div>
+    <button class="btn" id="btn-custom" onclick="toggleCustom()">🕘 טווח מותאם</button>
+    <span class="ctrl-label" style="margin-inline-start:6px">מוצר</span>
+    <div id="prod-filter"></div>
+    <div class="spacer"></div>
+    <span id="file-info"></span>
+    <button class="btn" onclick="resetAll()" title="הסר את כל הנתונים">⊗ נקה</button>
+  </div>
+
+  <div id="custom-panel">
+    <label>מ־</label><input type="datetime-local" id="cf" step="1"/>
+    <label>עד</label><input type="datetime-local" id="ct" step="1"/>
+    <button class="btn btn-primary" onclick="applyCustom()">החל</button>
+    <button class="btn" onclick="clearCustom()">נקה טווח</button>
+    <span id="custom-info" style="font-size:11px;color:var(--muted)"></span>
+  </div>
+
+  <div id="notice-slot"></div>
+
+  <div id="kpi-row"></div>
+
+  <div id="tabs">
+    <button class="tab on" data-v="users"  onclick="setView('users')">👥 משתמשים <span class="pill" id="pill-users">0</span></button>
+    <button class="tab"    data-v="activity" onclick="setView('activity')">📈 פעילות</button>
+    <button class="tab"    data-v="safety" onclick="setView('safety')">🛡 שאלות חריגות <span class="pill" id="pill-safety">0</span></button>
+    <button class="tab"    data-v="chat"   onclick="setView('chat')">💬 היסטוריית שיחות <span class="pill" id="pill-chat">0</span></button>
+  </div>
+
+  <!-- Users -->
+  <div class="view on" id="view-users">
+    <div class="card">
+      <div class="card-hdr">
+        <h3>משתמשים שהשתמשו ב-Gemini Enterprise</h3>
+        <span class="sub" id="users-sub"></span>
+        <div class="spacer"></div>
+        <input type="search" id="users-q" placeholder="חיפוש משתמש..." oninput="renderUsers()" style="width:210px">
+      </div>
+      <div class="tbl-scroll"><table class="tbl" id="users-tbl"></table></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-hdr"><h3>פרומפטים לפי משתמש</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:290px"><canvas id="c-user-prompts"></canvas></div></div></div>
+      <div class="card"><div class="card-hdr"><h3>שאלות חריגות לפי משתמש</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:290px"><canvas id="c-user-flag"></canvas></div></div></div>
+    </div>
+  </div>
+
+  <!-- Activity -->
+  <div class="view" id="view-activity">
+    <div class="card">
+      <div class="card-hdr"><h3 id="act-title">פעילות לאורך זמן</h3><span class="sub" id="act-sub"></span></div>
+      <div class="card-body"><div class="chart-box" style="height:330px"><canvas id="c-timeline"></canvas></div></div>
+    </div>
+    <div class="grid-2">
+      <div class="card"><div class="card-hdr"><h3>התפלגות לפי שעה ביום</h3><span class="sub">0–23</span></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-hour"></canvas></div></div></div>
+      <div class="card"><div class="card-hdr"><h3>התפלגות לפי יום בשבוע</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-dow"></canvas></div></div></div>
+      <div class="card"><div class="card-hdr"><h3>משתמשים ייחודיים לאורך זמן</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-uniq"></canvas></div></div></div>
+      <div class="card"><div class="card-hdr"><h3>פעילות לפי מוצר</h3><span class="sub">Gemini · NotebookLM</span></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-product"></canvas></div></div></div>
+    </div>
+  </div>
+
+  <!-- Safety -->
+  <div class="view" id="view-safety">
+    <div id="safety-kpis" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(172px,1fr));gap:12px;margin-bottom:18px"></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-hdr"><h3>שאלות חריגות לאורך זמן</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-flag-time"></canvas></div></div></div>
+      <div class="card"><div class="card-hdr"><h3>סיבות חסימה</h3></div>
+        <div class="card-body"><div class="chart-box" style="height:270px"><canvas id="c-flag-reason"></canvas></div>
+          <div id="reason-note" style="font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:11px"></div>
+        </div></div>
+    </div>
+    <div class="card">
+      <div class="card-hdr">
+        <h3>כל השאלות שסומנו</h3>
+        <span class="sub" id="safety-sub"></span>
+        <div class="spacer"></div>
+        <input type="search" id="safety-q" placeholder="חיפוש בטקסט..." oninput="renderSafety()" style="width:210px">
+      </div>
+      <div id="safety-list"></div>
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div class="view" id="view-chat">
+    <div id="chat-layout">
+      <div id="chat-users">
+        <div class="card-hdr" style="border-bottom:1px solid var(--border)">
+          <h3 style="font-size:12.5px">משתמשים</h3>
+        </div>
+        <input type="search" id="chat-q" placeholder="חיפוש..." oninput="renderChatUsers()"
+          style="width:calc(100% - 20px);margin:10px">
+        <div id="chat-user-list"></div>
+      </div>
+      <div class="card" style="margin:0">
+        <div id="conv-tabs"></div>
+        <div id="thread"></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>Gemini Enterprise Usage Report · נתונים מ-Cloud Logging · הכל מעובד מקומית בדפדפן</footer>
