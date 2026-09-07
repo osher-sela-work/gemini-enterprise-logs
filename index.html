@@ -992,6 +992,7 @@ function finishLoad(){
   linkArmorByText();      // must precede buildConversations — it sets blockedBy
   buildConversations();
   resolveAttribution();
+  collapseReplayChains();   // after armor is attached, so it merges too
   buildUsers();
   $('upload-zone').style.display='none';
   $('controls').style.display='flex';
@@ -1023,7 +1024,7 @@ function buildConversations(){
     });
     const last=c.recs[c.recs.length-1];
     const msgs=coalesce([...(best.inputMsgs||[]), ...(last.outputMsgs||[])]);
-    const prompts=msgs.filter(m=>m.kind==='text'&&m.role==='user');
+    const prompts=msgs.filter(m=>m.kind==='text'&&m.role==='user'&&!m.relay);
     const sources=[]; const seenSrc=new Set();
     msgs.forEach(m=>(m.sources||[]).forEach(s=>{
       const k=s.uri||s.title; if(k&&!seenSrc.has(k)){seenSrc.add(k);sources.push(s);}
@@ -1064,7 +1065,7 @@ function coalesce(messages){
         const merge = last && last.kind==='text' && last.role===role &&
                       (role==='assistant' || last._mi===mi);
         if(merge){ last.text+=t; last._mi=mi; }
-        else out.push({kind:'text', role, text:t, _mi:mi});
+        else out.push({kind:'text', role, text:t, _mi:mi, relay:role==='user'&&isRelay(t)});
       } else if(kind==='tool_call'){
         out.push({kind:'tool_call', role:'tool', _mi:mi,
           name:p.name||'tool', id:p.id||'',
@@ -1096,6 +1097,18 @@ function extractSources(resp){
 /* ═══ Attribution ══════════════════════════════════════════ */
 
 const normText = s => String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+
+/* Multi-agent orchestration relays sub-agent output back into the thread as
+   role:"user" turns, so role alone does not mean "a person typed this".
+   These carry unmistakable framework markers no human would type. Counting
+   them as prompts inflated one real chat of ~6 questions to 204, and the
+   whole export from ~31 genuine prompts to ~629. They stay visible in the
+   transcript, collapsed and labelled, but never count as questions asked. */
+const RELAY_RE = new RegExp(
+  '<<<(?:BEGIN|END)_QUOTED_AGENT_CONTENT>>>' +
+  '|below is a transcript of what another agent did' +
+  '|^\\s*\\[[a-z0-9_.-]+\\]\\s+said:', 'i');
+const isRelay = t => RELAY_RE.test(String(t||''));
 
 /* Model Armor sanitizes the same prompt more than once — the sample shows
    two SANITIZE_USER_PROMPT entries 58 ms apart, identical text and verdict,
@@ -1196,10 +1209,24 @@ function resolveAttribution(){
       (!c.engineId || !a.engineId || c.engineId===a.engineId) &&
       (!c.email || !a.email || c.email===a.email);
 
-    // Best case: the conversation already contains this exact prompt.
-    let host=convs.find(c=>compatible(c) && c.prompts.some(p=>normText(p.text)===needle));
-    if(host){
-      host.prompts.forEach(p=>{ if(normText(p.text)===needle) p.blocked=true; });
+    /* Best case: a conversation already contains this exact prompt.
+
+       The same text can appear in more than one chat — a person retypes a
+       question, and cumulative replay repeats it. Identity is not exclusive:
+       whoever typed it typed it in all of them, so the email propagates to
+       every match. Only the armor record itself is exclusive, so that goes to
+       the nearest in time. Taking just the first match here left a second,
+       equally-matching chat stranded as unattributed.                      */
+    const hosts=convs.filter(c=>compatible(c) && c.prompts.some(p=>normText(p.text)===needle));
+    let host=null;
+    if(hosts.length){
+      let gap=Infinity;
+      hosts.forEach(h=>{
+        h.prompts.forEach(p=>{ if(normText(p.text)===needle) p.blocked=true; });
+        if(!h.email && a.email){ h.email=a.email; h.emailSrc='text-match'; linkedCount++; }
+        const d=Math.min(Math.abs(h.firstTs-a.ts), Math.abs(h.lastTs-a.ts));
+        if(d<gap){ gap=d; host=h; }
+      });
     } else {
       /* Otherwise fall back to time: a prompt blocked seconds after a
          conversation's last turn is almost always the next thing typed in
@@ -1244,7 +1271,91 @@ function resolveAttribution(){
 
   convs=convs.concat(orphanBlockedThreads());
   convs.sort((a,b)=>b.lastTs-a.lastTs);
+  tenantFallback();
   convs.forEach(c=>{ if(!c.email){ c.email=UNATTRIBUTED; c.emailSrc='none'; } });
+}
+
+/* Gemini Enterprise mints a NEW conversation.id (and a new invocation id)
+   for each turn, while gen_ai.input.messages keeps replaying the whole
+   history. One continuous chat therefore surfaces as a ladder of separate
+   conversations — 1 turn, 2 turns, 3 turns … each containing everything
+   before it. Six tabs for one session.
+
+   Nothing in the log links them: conversation id, invocation id and trace are
+   all distinct per turn. The only available signal is the prompt sequence
+   itself, and a conversation whose prompts are an exact ordered prefix of
+   another's is that same session logged earlier. Collapse into the longest.
+
+   Where a shorter conversation is a prefix of two chats that later diverge,
+   the parent is genuinely ambiguous, so it is left alone rather than guessed. */
+let replayMerged=0;
+function collapseReplayChains(){
+  replayMerged=0;
+  const sig=c=>c.prompts.map(p=>normText(p.text));
+  const eligible=convs.filter(c=>!c.blockedOnly && !c.accessOnly && c.prompts.length);
+  const sigs=new Map(eligible.map(c=>[c,sig(c)]));
+  const sameSession=(a,b)=>a.email===b.email && a.product===b.product &&
+                           (a.notebookId||'')===(b.notebookId||'');
+  const isPrefix=(s,l)=>s.length<l.length && s.every((v,i)=>v===l[i]);
+
+  const absorbed=new Set();
+  // Longest first, so a whole ladder collapses into its maximal member.
+  [...eligible].sort((a,b)=>sigs.get(b).length-sigs.get(a).length).forEach(host=>{
+    if(absorbed.has(host)) return;
+    const hs=sigs.get(host);
+    eligible.forEach(c=>{
+      if(c===host || absorbed.has(c) || !sameSession(c,host)) return;
+      if(!isPrefix(sigs.get(c), hs)) return;
+      // Ambiguous when another surviving chat of the same length also
+      // contains it and the two differ — two real chats sharing an opening.
+      const rivals=eligible.filter(o=>o!==host && !absorbed.has(o) &&
+        sameSession(o,host) && sigs.get(o).length===hs.length &&
+        isPrefix(sigs.get(c), sigs.get(o)) &&
+        sigs.get(o).join(' ')!==hs.join(' '));
+      if(rivals.length) return;
+
+      host.firstTs=Math.min(host.firstTs,c.firstTs);
+      host.lastTs =Math.max(host.lastTs, c.lastTs);
+      host.recCount+=c.recCount;
+      host.tokens+=c.tokens;
+      c.armor.forEach(a=>{ if(!host.armor.includes(a)) host.armor.push(a); });
+      c.sources.forEach(s=>{ if(!host.sources.some(x=>x.uri===s.uri)) host.sources.push(s); });
+      // A turn blocked in the earlier copy is the same turn here.
+      sigs.get(c).forEach((t,i)=>{
+        if(c.prompts[i].blocked && host.prompts[i]) host.prompts[i].blocked=true; });
+      host.mergedFrom=(host.mergedFrom||1)+1;
+      absorbed.add(c);
+      replayMerged++;
+    });
+  });
+  convs=convs.filter(c=>!absorbed.has(c));
+}
+
+/* Last resort for conversations no join could reach — the inference log
+   simply omits the principal, so a chat on a day with no Model Armor activity
+   has nothing to match against.
+
+   If the export names exactly one person on that engine, there is no one else
+   the chat could belong to, so attribute it and mark the basis as "tenant".
+   The moment a second principal appears on the engine this declines to guess
+   and the chat stays unattributed — which is the honest answer, because the
+   data genuinely cannot distinguish them.                                  */
+let tenantCount=0;
+function tenantFallback(){
+  tenantCount=0;
+  const byEngine={}, all=new Set();
+  records.forEach(r=>{
+    if(!r.email) return;
+    all.add(r.email);
+    const k=r.engineId||'*';
+    (byEngine[k]=byEngine[k]||new Set()).add(r.email);
+  });
+  convs.forEach(c=>{
+    if(c.email) return;
+    const onEngine=byEngine[c.engineId||'*'];
+    const pool=(onEngine && onEngine.size) ? onEngine : all;
+    if(pool.size===1){ c.email=[...pool][0]; c.emailSrc='tenant'; tenantCount++; }
+  });
 }
 
 /* A prompt Model Armor blocked before the model ran leaves no conversation
@@ -1277,20 +1388,46 @@ function orphanBlockedThreads(){
 /* ═══ NotebookLM ═══════════════════════════════════════════
    NotebookLM has no conversation id — the notebook is the thread, so each
    notebook becomes a tab in the chat view, mirroring the product's own UI. */
+/* Opening a notebook is activity even when nobody types anything. NotebookLM
+   logs those as their own methods with no userQuery, so filtering on prompt
+   text alone made a notebook someone created and opened vanish entirely. */
+const NB_ACTIONS = {
+  CreateNotebook:  {label:'מחברת נוצרה',    icon:'✨'},
+  GetNotebook:     {label:'מחברת נפתחה',    icon:'📂'},
+  DeleteNotebook:  {label:'מחברת נמחקה',    icon:'🗑'},
+  UpdateNotebook:  {label:'מחברת עודכנה',   icon:'✏️'},
+  ListNotebooks:   {label:'רשימת מחברות',   icon:'📚'},
+  CreateSource:    {label:'מקור נוסף',      icon:'📎'},
+  UploadSource:    {label:'מקור הועלה',     icon:'📎'},
+  DeleteSource:    {label:'מקור הוסר',      icon:'📎'},
+};
+const nbAction = m => NB_ACTIONS[m] || null;
+
 function notebookThreads(){
   const byKey={};
-  records.filter(r=>r.kind==='notebooklm' && r.promptText).forEach(r=>{
+  // Any NotebookLM record tied to a notebook counts, query or not.
+  records.filter(r=>r.kind==='notebooklm' && (r.promptText || r.notebookId)).forEach(r=>{
     const key=(r.email||UNATTRIBUTED)+'|'+(r.notebookId||'(ללא מחברת)');
     if(!byKey[key]) byKey[key]={
       id:'nb:'+key, notebookId:r.notebookId||'', email:r.email||UNATTRIBUTED,
       emailSrc:r.email?'direct':'none', product:'NotebookLM',
       firstTs:r.ts, lastTs:r.ts, turns:0, tokens:0, errored:false,
       agent:r.method||'NotebookLM', engineId:'', recCount:0,
-      msgs:[], prompts:[], sources:[], armor:[],
+      msgs:[], prompts:[], sources:[], armor:[], actions:[],
     };
     const t=byKey[key];
     t.firstTs=Math.min(t.firstTs,r.ts); t.lastTs=Math.max(t.lastTs,r.ts);
     t.recCount++;
+
+    if(!r.promptText){
+      const act=nbAction(r.method);
+      if(act){
+        t.actions.push({method:r.method, ts:r.ts});
+        t.msgs.push({kind:'action', ts:r.ts, label:act.label, icon:act.icon});
+      }
+      return;                       // no question was asked in this record
+    }
+
     const p={kind:'text', role:'user', text:r.promptText, ts:r.ts, rec:r};
     t.msgs.push(p); t.prompts.push(p); t.turns++;
     // Model Armor logs every prompt it inspects, most with an ALLOW verdict.
@@ -1304,6 +1441,8 @@ function notebookThreads(){
   });
   return Object.values(byKey).map(t=>{
     t.msgs.sort((a,b)=>a.ts-b.ts);
+    // A notebook that was opened or created but never asked anything.
+    t.accessOnly = t.turns===0 && t.actions.length>0;
     return t;
   });
 }
@@ -1585,7 +1724,13 @@ function renderKPIs(){
   $('kpi-row').innerHTML=[
     kpi('משתמשים פעילים', fmtNum(activeUsers.size), `${users.length} סה״כ בדוח`, css('--gem')),
     kpi('פרומפטים', fmtNum(ev.length), 'כולל נחסמים', css('--blue')),
-    kpi('שיחות', fmtNum(cs.length), `${fmtNum(cs.reduce((s,c)=>s+c.recCount,0))} רשומות`, css('--purple')),
+    // Opened-but-never-asked notebooks are real activity, but they are not
+    // conversations — call them out rather than folding them into the count.
+    (()=>{ const opened=cs.filter(c=>c.accessOnly).length;
+      return kpi('שיחות', fmtNum(cs.length-opened),
+        opened?`+${fmtNum(opened)} מחברות שנפתחו ללא שאלה`
+              :`${fmtNum(cs.reduce((s,c)=>s+c.recCount,0))} רשומות`,
+        css('--purple')); })(),
     kpi('שאלות חריגות', fmtNum(fl.length), `${fmtNum(blocked)} נחסמו`, fl.length?css('--err'):css('--muted')),
     kpi('שיעור חסימה', rate+'%', 'מתוך כלל הפרומפטים', blocked?css('--warn'):css('--ok')),
     kpi('טוקני קלט', tokens?fmtNum(tokens):'—', 'לפי הדיווח בלוג', css('--ok')),
@@ -1627,7 +1772,7 @@ function renderUsers(){
   $('users-tbl').innerHTML=
     `<thead><tr>${th('user','משתמש')}${th('prompts','פרומפטים')}${th('convs','שיחות')}`+
     `${th('flagged','חריגות')}<th>מוצרים</th>${th('first','ראשון')}${th('last','אחרון')}`+
-    `<th>סטטוס</th></tr></thead><tbody>`+
+    `</tr></thead><tbody>`+
     (rows.length?rows.map(u=>{
       const c=colorFor(u.email);
       const unk=u.email===UNATTRIBUTED;
@@ -1645,12 +1790,9 @@ function renderUsers(){
         }).join('')||'<span style="color:var(--muted)">—</span>'}</span></td>
         <td class="num" style="white-space:nowrap">${fmtTs(u.wFirst)}</td>
         <td class="num" style="white-space:nowrap">${fmtTs(u.wLast)}</td>
-        <td>${unk?'<span class="tag tag-mute">ללא שיוך</span>'
-             :u.linked?'<span class="tag tag-warn">שויך לפי זמן</span>'
-             :'<span class="tag tag-ok">מזוהה</span>'}</td>
       </tr>`;
     }).join('')
-    :`<tr><td colspan="8" class="empty">אין משתמשים בטווח שנבחר</td></tr>`)+
+    :`<tr><td colspan="7" class="empty">אין משתמשים בטווח שנבחר</td></tr>`)+
     `</tbody>`;
 }
 
@@ -1901,10 +2043,11 @@ function renderThread(){
 
   // Number the real conversations 1..n oldest-first; blocked-only entries are
   // labelled, not numbered, so the sequence has no gaps.
-  const numbered=cs.filter(c=>!c.blockedOnly);
+  const numbered=cs.filter(c=>!c.blockedOnly && !c.accessOnly);
   $('conv-tabs').innerHTML=cs.map(c=>{
     const hit=c.armor.filter(a=>a.matched||a.blocked).length;
     const label = c.blockedOnly ? 'נחסמה'
+      : c.accessOnly ? 'נפתחה בלבד'
       : `שיחה ${numbered.length-numbered.indexOf(c)}`;
     const p=prodOf(c.product);
     return `<button class="conv-tab ${c.id===chatConv?'on':''}" onclick="pickConv('${esc(c.id)}')"
@@ -1923,8 +2066,13 @@ function renderThread(){
     ${c.tokens?`<span>🔢 ${fmtNum(c.tokens)} טוקנים</span>`:''}
     ${c.errored?'<span class="tag tag-err">הסתיים בשגיאה</span>':''}
     ${c.emailSrc==='linked'?'<span class="tag tag-warn">שיוך לפי קרבה בזמן</span>':''}
+    ${c.emailSrc==='text-match'?'<span class="tag tag-ok" title="פרומפט בשיחה זהה מילה במילה לרשומת Model Armor שנושאת אימייל — שיוך ודאי">שיוך לפי התאמת טקסט</span>':''}
+    ${c.emailSrc==='tenant'?'<span class="tag tag-warn" title="רשומות השיחה לא כוללות אימייל, ובייצוא הזה מופיע משתמש יחיד באותו engine — ולכן השיחה שויכה אליו">שיוך ברמת הארגון</span>':''}
     ${c.emailSrc==='none'?'<span class="tag tag-mute">ללא שיוך</span>':''}
     ${c.blockedOnly?'<span class="tag tag-err" title="Model Armor חסם את הפרומפט לפני שהמודל רץ, ולכן לא נוצרה רשומת שיחה">נחסמה לפני הרצת המודל</span>':''}
+    ${c.accessOnly?'<span class="tag tag-info" title="המשתמש פתח או יצר את המחברת אך לא שאל בה דבר">ללא שאלות — גישה בלבד</span>':''}
+    ${c.mergedFrom?`<span class="tag tag-info" title="Gemini Enterprise רושם מזהה שיחה חדש בכל תור וחוזר על כל ההיסטוריה. ${c.mergedFrom} רשומות שיחה זוהו כאותו שיח ואוחדו">אוחדו ${c.mergedFrom} רשומות שיחה</span>`:''}
+    ${c.notebookId?`<span class="mono" style="opacity:.6">📓 ${esc(c.notebookId.slice(0,8))}</span>`:''}
     <span class="mono" style="opacity:.6">${esc(c.id)}</span>
   </div>`;
 
@@ -1940,6 +2088,20 @@ function renderThread(){
       return `<div class="msg tool" style="align-self:center;max-width:96%"><div class="bub">
         <b>📎 מקורות (${m.sources.length})</b><br>${m.sources.map(s=>
           `<span class="q-chip">${s.notebook?'📓 ':''}${esc(s.title)}</span>`).join('')}</div></div>`;
+    }
+    // Notebook lifecycle event — activity without a question.
+    if(m.kind==='action'){
+      return `<div class="msg tool" style="align-self:center;max-width:96%"><div class="bub"
+        style="border-style:solid;border-color:var(--gem)55;color:var(--gem)">
+        ${m.icon} ${esc(m.label)} · <span class="mono" style="opacity:.75">${fmtTs(m.ts,1)}</span>
+      </div></div>`;
+    }
+    // Framework relay: shown so the transcript stays complete, but visually
+    // demoted so it never reads as something the person asked.
+    if(m.kind==='text' && m.relay){
+      const n=m.text.length;
+      return `<div class="msg tool" style="align-self:center;max-width:96%"><div class="bub"
+        title="${esc(m.text.slice(0,300))}">🔁 תוכן שהועבר בין סוכנים · ${fmtNum(n)} תווים</div></div>`;
     }
     const isUser=m.role==='user';
     // Prefer the flag set when the thread was built (it knows the verdict);
