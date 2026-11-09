@@ -1897,7 +1897,10 @@ function collapseReplayChains(){
   const sig=c=>c.prompts.map(p=>normText(p.text));
   const eligible=convs.filter(c=>!c.blockedOnly && !c.accessOnly && c.prompts.length);
   const sigs=new Map(eligible.map(c=>[c,sig(c)]));
-  const sameSession=(a,b)=>a.email===b.email && a.product===b.product &&
+  // A turn whose own rows name no user still belongs to the chat it replays: one
+  // attributed turn names the user of the whole ladder. Two different users never merge.
+  const sameUser=(a,b)=>a.email===b.email || a.email===UNATTRIBUTED || b.email===UNATTRIBUTED;
+  const sameSession=(a,b)=>sameUser(a,b) && a.product===b.product &&
                            (a.notebookId||'')===(b.notebookId||'');
   const isPrefix=(s,l)=>s.length<l.length && s.every((v,i)=>v===l[i]);
 
@@ -1917,6 +1920,7 @@ function collapseReplayChains(){
         sigs.get(o).join(' ')!==hs.join(' '));
       if(rivals.length) return;
 
+      if(host.email===UNATTRIBUTED && c.email!==UNATTRIBUTED){ host.email=c.email; host.emailSrc=c.emailSrc; }
       host.firstTs=Math.min(host.firstTs,c.firstTs);
       host.lastTs =Math.max(host.lastTs, c.lastTs);
       host.recCount+=c.recCount;
