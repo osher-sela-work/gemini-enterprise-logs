@@ -457,6 +457,8 @@ function entryToRecord(e){
     // One chat turn's rows share it: the StreamAssist row (which names the
     // user) and the gen_ai row (which holds the conversation, but no user).
     trace: String(getAny(e,'trace')||'').split('/').pop(),
+    // A StreamAssist turn's id; its Model Armor checks end their client_correlation_id with it.
+    assistToken: String(getAny(e,'jsonPayload.assistToken','jsonPayload.response.assistToken')||''),
     email, emailSrc: email?'direct':'',
     // Which product the event came from — drives the UI badge and filters.
     product: kind==='notebooklm' ? 'NotebookLM'
@@ -1277,6 +1279,18 @@ function collapseArmorDupes(){
 let textMatchCount=0;
 function linkArmorByText(){
   textMatchCount=0;
+  /* Exact join first. A Gemini Enterprise Model Armor check's client_correlation_id is
+     "AS|<assistant>|<assistToken>", and the StreamAssist row of that turn carries the same
+     assistToken and names the user — also when the prompt was blocked (answer state SKIPPED)
+     and the model never ran, so no conversation row exists to carry it.                    */
+  const byToken={};
+  records.forEach(r=>{ if(r.kind!=='armor' && r.assistToken && r.email) byToken[r.assistToken]=r; });
+  records.filter(r=>r.kind==='armor' && !r.email).forEach(a=>{
+    const ids=(a.correlationIds&&a.correlationIds.length?a.correlationIds:[a.correlationId]).filter(Boolean);
+    const src=ids.map(id=>byToken[String(id).split('|').pop()]).find(Boolean);
+    if(src){ a.email=src.email; a.emailSrc='direct'; a.product=src.product; }
+  });
+
   const byText={};
   records.filter(r=>r.kind!=='armor' && r.email && r.promptText).forEach(c=>{
     const k=normText(c.promptText);
