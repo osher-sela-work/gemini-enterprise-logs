@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+
+project_id     = "my-project"
+bucket         = "my-report-bucket"
+client_id      = "1234567890-abc.apps.googleusercontent.com"
+allowed_domain = "example.com"
+
+# Optional
+# region      = "europe-west1"
+# log_project = "project-with-the-logs"   # if the logs are in another project
+# ge_app      = "gemini-enterprise-myapp_1234567890123"

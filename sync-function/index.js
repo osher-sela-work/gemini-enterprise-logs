@@ -5,10 +5,11 @@
 //
 // Settings (environment variables of the function):
 //   LOG_PROJECT     the Google Cloud project the Gemini Enterprise logs are written to
-//   BUCKET          the report's bucket (icl-database)
+//   BUCKET          the report's bucket
 //   CLIENT_ID       the report's OAuth client ID (GCS_CLIENT_ID in src/app.js)
 //   ALLOWED_DOMAIN  the organization's email domain; several: comma-separated
-//   LOG_FILTER      optional; default DEFAULT_FILTER below
+//   GE_APP          optional; one Gemini Enterprise app's engine id, to leave the project's other apps out
+//   LOG_FILTER      optional; replaces DEFAULT_FILTER below (GE_APP then has no effect)
 //
 // The service account needs Logs Viewer (roles/logging.viewer) on LOG_PROJECT and Storage Object Creator plus
 // Storage Object Viewer (to find the last marker) on the bucket. The function allows unauthenticated invocations:
@@ -19,14 +20,17 @@ const { sync } = require('./sync');
 
 const { LOG_PROJECT, BUCKET, CLIENT_ID } = process.env;
 const DOMAINS = String(process.env.ALLOWED_DOMAIN || '').split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
-// The Logs Explorer export query (Gemini Enterprise's gen_ai.* logs, NotebookLM Enterprise, Model Armor's checks),
-// plus all of gemini_enterprise_user_activity: its StreamAssist rows (resource.type consumed_api, which the export
-// query misses) are the only ones that name the user of a Gemini Enterprise chat.
-const DEFAULT_FILTER =
-  'resource.type="discoveryengine.googleapis.com/Agent"' +
-  ' OR resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"' +
-  ' OR resource.type="modelarmor.googleapis.com/SanitizeOperation"' +
+// Gemini Enterprise: the gen_ai.* logs and gemini_enterprise_user_activity (its StreamAssist rows, resource.type
+// consumed_api, are the only ones that name a chat's user). With GE_APP set, of that one app only: its engine id
+// must appear somewhere in the entry. NotebookLM Enterprise and Model Armor rows name no app, so all are kept.
+// In the Logging query language AND binds looser than OR, hence the parentheses.
+const GE_APP = String(process.env.GE_APP || '').trim();
+const GEMINI = 'resource.type="discoveryengine.googleapis.com/Agent"' +
   ' OR log_id("discoveryengine.googleapis.com/gemini_enterprise_user_activity")';
+const DEFAULT_FILTER =
+  (GE_APP ? `((${GEMINI}) AND "${GE_APP.replace(/"/g, '')}")` : `(${GEMINI})`) +
+  ' OR resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"' +
+  ' OR resource.type="modelarmor.googleapis.com/SanitizeOperation"';
 const LOG_FILTER = process.env.LOG_FILTER || DEFAULT_FILTER;
 
 const auth = new GoogleAuth({
