@@ -849,6 +849,9 @@ function gcsApplyCaps(){
   $('btn-gcs').style.display=c.admin?'':'none';
   document.querySelector('#gcs-dirs [data-d="metrics"]').style.display=c.readMetrics?'':'none';
   document.querySelector('#gcs-dirs [data-d="chats"]').style.display=c.readChats?'':'none';
+  // Without chats access the chat history is metrics rows only: a list of empty chats. Hide the tab.
+  document.querySelector('.tab[data-v="chat"]').style.display=c.readChats?'':'none';
+  if(!c.readChats && view==='chat') view='users';
   $('gcs-admin-seg').style.display=c.admin?'':'none';
   $('gcs-user').innerHTML=gcsUser
     ? `<span dir="ltr">${esc(gcsUser.email)}</span>`+
@@ -1937,7 +1940,7 @@ function renderUsers(){
     (rows.length?rows.map(u=>{
       const c=colorFor(u.email);
       const unk=u.email===UNATTRIBUTED;
-      return `<tr class="row-click" onclick="gotoChat('${esc(u.email)}')">
+      return `<tr class="${gcsCaps&&!gcsCaps.readChats?'':'row-click'}" onclick="gotoChat('${esc(u.email)}')">
         <td><div class="u-cell">
           <span class="avatar" style="background:${c}22;color:${c}">${unk?'?':initials(u.email)}</span>
           <span style="min-width:0"><span class="u-name">${esc(u.email.split('@')[0])}</span>
@@ -2159,7 +2162,10 @@ function renderSafety(){
 
 /* ── Chat view ────────────────────────────────────────────── */
 let chatUser=null, chatConv=null;
-function gotoChat(email){ chatUser=email; chatConv=null; setView('chat'); }
+function gotoChat(email){
+  if(gcsCaps && !gcsCaps.readChats) return;     // no chats access: nothing to open
+  chatUser=email; chatConv=null; setView('chat');
+}
 
 function renderChatUsers(){
   const q=($('chat-q').value||'').toLowerCase().trim();
@@ -2193,6 +2199,42 @@ function renderChatUsers(){
 function pickChatUser(e){ chatUser=e; chatConv=null; renderChatUsers(); renderThread(); }
 function pickConv(id){ chatConv=id; renderThread(); }
 
+/* Someone else's chats open only after the viewer gives a reason and the sync
+   function has saved it (audit/access/ in the bucket, readable by admins only).
+   Asked once per person per page load; if saving fails, the chats stay closed. */
+const accessGranted=new Set();
+const isOwnChats=email=>!!(gcsUser && email===gcsUser.email);
+function renderAccessGate(){
+  $('conv-tabs').innerHTML='';
+  const who=chatUser===UNATTRIBUTED?'משתמש לא משויך':chatUser;
+  $('thread').innerHTML=`<div class="access-gate">
+    <h3>צפייה בשיחות של <span dir="ltr">${esc(who)}</span></h3>
+    <p>השיחות שייכות למשתמש אחר. כדי לצפות בהן יש לציין סיבה. הסיבה נשמרת יחד עם שמך והשעה.</p>
+    <textarea id="access-reason" maxlength="2000" rows="3" placeholder="סיבת הצפייה"></textarea>
+    <div class="access-gate-row">
+      <button class="btn btn-primary" id="access-go" onclick="submitAccessReason()">שמור וצפה</button>
+      <span id="access-msg" class="access-msg"></span>
+    </div></div>`;
+}
+async function submitAccessReason(){
+  const viewed=chatUser, reason=$('access-reason').value.trim(), msg=$('access-msg');
+  if(!reason){ msg.textContent='יש לציין סיבה'; return; }
+  if(!syncConfigured()){ msg.textContent='לא ניתן לשמור את הסיבה: ה-secret ‏SYNC_URL לא הוגדר'; return; }
+  $('access-go').disabled=true; msg.textContent='שומר…';
+  try{
+    const r=await fetch(SYNC_URL,{method:'POST', headers:{
+      Authorization:`Bearer ${await gcsGetToken(GCS_SCOPE_RO)}`, 'Content-Type':'application/json'},
+      body:JSON.stringify({action:'access', viewed, reason})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||`${r.status}`);
+    accessGranted.add(viewed);
+    if(chatUser===viewed) renderThread();
+  }catch(err){
+    msg.textContent='הסיבה לא נשמרה, ולכן השיחות לא נפתחו: '+err.message;
+    $('access-go').disabled=false;
+  }
+}
+
 function renderThread(){
   const cs=winConvs().filter(c=>c.email===chatUser).sort((a,b)=>b.lastTs-a.lastTs);
   if(!cs.length){
@@ -2200,6 +2242,7 @@ function renderThread(){
     $('thread').innerHTML='<div class="empty">בחר משתמש כדי לראות את היסטוריית השיחות</div>';
     return;
   }
+  if(!isOwnChats(chatUser) && !accessGranted.has(chatUser)){ renderAccessGate(); return; }
   if(!chatConv || !cs.some(c=>c.id===chatConv)) chatConv=cs[0].id;
 
   // Number the real conversations 1..n oldest-first; blocked-only entries are

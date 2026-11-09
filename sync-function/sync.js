@@ -180,4 +180,16 @@ async function sync({ request, project, bucket, filter, now = Date.now(), wait =
   return result;
 }
 
-module.exports = { sync, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR };
+// ---- Access to other people's chats ----
+
+// One create-only object per access: who opened whose chats, when, and the reason they gave. Outside chats/ and
+// metrics/, so only bucket-wide readers (the admins) can read it; nobody but the function can write it.
+const ACCESS_DIR = 'audit/access/';
+async function recordAccess({ request, bucket, viewer, viewed, reason, now = Date.now() }) {
+  const name = `${ACCESS_DIR}${stamp(now)}_${require('crypto').randomUUID()}.json`;
+  const entry = { at: new Date(now).toISOString(), viewer, viewed, reason };
+  await create(request, bucket, name, Buffer.from(JSON.stringify(entry, null, 2), 'utf8'), 'application/json');
+  return { name, ...entry };
+}
+
+module.exports = { sync, recordAccess, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR, ACCESS_DIR };

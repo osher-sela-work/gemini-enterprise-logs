@@ -73,6 +73,16 @@ input[type=datetime-local],input[type=date],select,input[type=text],input[type=s
 :root:not(.light) input[type=datetime-local],:root:not(.light) input[type=date]{color-scheme:dark;}
 input:focus,select:focus{border-color:var(--gem);}
 
+/* ── reason before viewing someone else's chats ── */
+.access-gate{max-width:480px;margin:48px auto;padding:20px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);}
+.access-gate h3{font-size:15px;font-weight:600;margin-bottom:6px;}
+.access-gate p{font-size:12px;color:var(--muted);margin-bottom:12px;}
+.access-gate textarea{width:100%;box-sizing:border-box;resize:vertical;background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none;}
+.access-gate textarea:focus{border-color:var(--gem);}
+.access-gate-row{display:flex;align-items:center;gap:10px;margin-top:10px;}
+.access-msg{font-size:12px;color:var(--muted);}
+
 /* ── tabs ── */
 #tabs{display:none;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;}
 .tab{padding:9px 16px;font-size:13px;font-weight:600;background:transparent;border:none;
