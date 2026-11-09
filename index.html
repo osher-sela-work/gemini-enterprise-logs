@@ -931,6 +931,8 @@ function entryToRecord(e){
     trace: String(getAny(e,'trace')||'').split('/').pop(),
     // A StreamAssist turn's id; its Model Armor checks end their client_correlation_id with it.
     assistToken: String(getAny(e,'jsonPayload.assistToken','jsonPayload.response.assistToken')||''),
+    // The chat a StreamAssist turn belongs to: …/sessions/<id>/assistAnswers/…
+    session: (String(getAny(e,'jsonPayload.response.answer.name')||'').match(/\/sessions\/([^/]+)/)||[])[1]||'',
     email, emailSrc: email?'direct':'',
     // Which product the event came from — drives the UI badge and filters.
     product: kind==='notebooklm' ? 'NotebookLM'
@@ -1610,8 +1612,13 @@ function finishLoad(){
 function buildConversations(){
   // gen_ai rows carry no user. The gemini_enterprise_user_activity row of the
   // same turn (StreamAssist) does, under the same trace: an exact join.
-  const traceEmail={};
-  records.forEach(r=>{ if(r.kind!=='inference' && r.trace && r.email) traceEmail[r.trace]=r.email; });
+  // The same row also names the chat (session) the turn belongs to.
+  const traceEmail={}, traceSession={};
+  records.forEach(r=>{
+    if(r.kind==='inference' || !r.trace) return;
+    if(r.email) traceEmail[r.trace]=r.email;
+    if(r.session) traceSession[r.trace]=r.session;
+  });
   const ownEmail=r=>r.email || traceEmail[r.trace] || '';
   const byConv={};
   records.filter(r=>r.kind==='inference').forEach(r=>{
@@ -1638,6 +1645,7 @@ function buildConversations(){
       id: c.id,
       email: ownEmail(c.recs.find(ownEmail) || {}),
       emailSrc: c.recs.find(ownEmail) ? 'direct' : '',
+      session: c.recs.map(r=>traceSession[r.trace]).find(Boolean) || '',
       firstTs: c.recs[0].ts, lastTs: last.ts,
       agent: best.agentName||'', engineId: best.engineId||'',
       turns: prompts.length,
@@ -1760,7 +1768,7 @@ function linkArmorByText(){
   records.filter(r=>r.kind==='armor' && !r.email).forEach(a=>{
     const ids=(a.correlationIds&&a.correlationIds.length?a.correlationIds:[a.correlationId]).filter(Boolean);
     const src=ids.map(id=>byToken[String(id).split('|').pop()]).find(Boolean);
-    if(src){ a.email=src.email; a.emailSrc='direct'; a.product=src.product; }
+    if(src){ a.email=src.email; a.emailSrc='direct'; a.product=src.product; a.session=src.session; }
   });
 
   const byText={};
@@ -1822,9 +1830,11 @@ function resolveAttribution(){
                     && r.emailSrc!=='text-match').forEach(a=>{
     const needle=normText(a.promptText);
     if(!needle) return;
+    // Same session when both are known: the same words typed into a new chat are a new chat.
     const compatible = c => !c.blockedOnly &&
       (!c.engineId || !a.engineId || c.engineId===a.engineId) &&
-      (!c.email || !a.email || c.email===a.email);
+      (!c.email || !a.email || c.email===a.email) &&
+      (!c.session || !a.session || c.session===a.session);
 
     /* Best case: a conversation already contains this exact prompt.
 
@@ -1879,6 +1889,7 @@ function resolveAttribution(){
     let best=null, bestGap=Infinity;
     records.filter(r=>r.kind==='armor' && r.email).forEach(a=>{
       if(c.engineId && a.engineId && c.engineId!==a.engineId) return;
+      if(c.session && a.session && c.session!==a.session) return;
       const gap = a.ts < c.firstTs ? c.firstTs-a.ts
                 : a.ts > c.lastTs  ? a.ts-c.lastTs : 0;
       if(gap<=LINK_WINDOW_MS && gap<bestGap){ bestGap=gap; best=a; }
@@ -1915,7 +1926,8 @@ function collapseReplayChains(){
   // attributed turn names the user of the whole ladder. Two different users never merge.
   const sameUser=(a,b)=>a.email===b.email || a.email===UNATTRIBUTED || b.email===UNATTRIBUTED;
   const sameSession=(a,b)=>sameUser(a,b) && a.product===b.product &&
-                           (a.notebookId||'')===(b.notebookId||'');
+                           (a.notebookId||'')===(b.notebookId||'') &&
+                           (!a.session || !b.session || a.session===b.session);
   const isPrefix=(s,l)=>s.length<l.length && s.every((v,i)=>v===l[i]);
 
   const absorbed=new Set();
@@ -1935,6 +1947,7 @@ function collapseReplayChains(){
       if(rivals.length) return;
 
       if(host.email===UNATTRIBUTED && c.email!==UNATTRIBUTED){ host.email=c.email; host.emailSrc=c.emailSrc; }
+      host.session=host.session||c.session;
       host.firstTs=Math.min(host.firstTs,c.firstTs);
       host.lastTs =Math.max(host.lastTs, c.lastTs);
       host.recCount+=c.recCount;
