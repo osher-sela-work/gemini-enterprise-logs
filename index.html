@@ -944,6 +944,16 @@ function entryToRecord(e){
     trace: String(getAny(e,'trace')||'').split('/').pop(),
     // A StreamAssist turn's id; its Model Armor checks end their client_correlation_id with it.
     assistToken: String(getAny(e,'jsonPayload.assistToken','jsonPayload.response.assistToken')||''),
+    // The sync's stats columns (sync.js addStats): one question asked, its chat, and whether it was flagged.
+    question: Number(getAny(e,'stats.question'))===1,
+    statsChat: String(getAny(e,'stats.chat')||''),
+    statsFlagged: Number(getAny(e,'stats.flagged'))===1,
+    // What was asked, when chats/ is loaded: a StreamAssist query's text, or NotebookLM's userQuery.
+    askText: fixText((()=>{
+      const parts=jsonOr(get(e,'jsonPayload.request.query.parts'),[]);
+      return (Array.isArray(parts)?parts:[]).map(x=>x&&x.text||'').join(' ').trim()
+        || String(getAny(e,'jsonPayload.request.query.text','jsonPayload.request.userQuery')||'');
+    })()),
     // The chat a StreamAssist turn belongs to: …/sessions/<id>/assistAnswers/…
     session: (String(getAny(e,'jsonPayload.response.answer.name')||'').match(/\/sessions\/([^/]+)/)||[])[1]||'',
     email, emailSrc: !email ? '' : (linked && email===linked && !getAny(e,'jsonPayload.userIamPrincipal')) ? 'synced' : 'direct',
@@ -985,7 +995,7 @@ function entryToRecord(e){
 // Worth parsing at all?
 function looksRelevant(r){
   return !!(r.ts && (r.promptText || r.convId || r.inputMsgs.length ||
-                     r.verdict || r.notebookId || r.answer ||
+                     r.verdict || r.notebookId || r.answer || r.question ||
                      (r.trace && r.email)));   // names the user of a chat turn
 }
 
@@ -2121,6 +2131,12 @@ function buildUsers(){
     };
     return map[email];
   };
+  // Everyone who asked a question is a user, also one whose only rows are questions.
+  records.forEach(r=>{
+    if(!r.question) return;
+    const u=touch(r.email||UNATTRIBUTED);
+    u.firstTs=Math.min(u.firstTs,r.ts); u.lastTs=Math.max(u.lastTs,r.ts);
+  });
   convs.forEach(c=>{
     const u=touch(c.email);
     u.prompts += c.turns;
@@ -2213,7 +2229,32 @@ function bucketLabel(k,g){
 }
 
 // Every user prompt as a flat event — the unit most charts count.
+/* The counts — questions, chats, flagged — come from the stats columns the sync writes (sync.js addStats)
+   whenever the data has them: one row per question asked, so they are the same with or without chats/.
+   Files without them (synced before, or exported by hand) are counted from the conversations' text. */
+const statsMode=()=>records.some(r=>r.question);
+function statEvents(){
+  const traceAgent={};
+  records.forEach(r=>{ if(r.kind==='inference' && r.trace && r.agentName) traceAgent[r.trace]=r.agentName; });
+  return records.filter(r=>r.question && inWin(r.ts) && prodOn(r.product)).map(r=>({
+    ts:r.ts, email:r.email||UNATTRIBUTED,
+    agent: r.product==='NotebookLM' ? 'NotebookLM' : (traceAgent[r.trace]||'(ללא)'),
+    conv: r.product+'|'+(r.statsChat||r.insertId), product:r.product,
+    text:r.askText, flagged:r.statsFlagged, approxTs:false,
+  })).sort((a,b)=>a.ts-b.ts);
+}
+// Per user in the time window: questions asked, chats, first and last.
+function userCounts(){
+  const map={};
+  promptEvents().forEach(e=>{
+    const u=map[e.email]=map[e.email]||{prompts:0, convs:new Set(), first:Infinity, last:0};
+    u.prompts++; u.convs.add(e.conv); u.first=Math.min(u.first,e.ts); u.last=Math.max(u.last,e.ts);
+  });
+  return map;
+}
+
 function promptEvents(){
+  if(statsMode()) return statEvents();
   const out=[];
   winConvs().forEach(c=>{
     c.prompts.forEach((p,i)=>{
@@ -2389,7 +2430,8 @@ function renderKPIs(){
     // Opened-but-never-asked notebooks are real activity, but they are not
     // conversations — call them out rather than folding them into the count.
     (()=>{ const opened=cs.filter(c=>c.accessOnly).length;
-      return kpi('שיחות', fmtNum(cs.length-opened),
+      const chats=statsMode() ? new Set(ev.map(e=>e.conv)).size : cs.length-opened;
+      return kpi('שיחות', fmtNum(chats),
         opened?`+${fmtNum(opened)} מחברות שנפתחו ללא שאלה`
               :`${fmtNum(cs.reduce((s,c)=>s+c.recCount,0))} רשומות`,
         css('--purple')); })(),
@@ -2411,7 +2453,12 @@ function renderUsers(){
   const flByUser={}; winFlagged().forEach(r=>{
     const e=r.email||UNATTRIBUTED; flByUser[e]=(flByUser[e]||0)+1; });
 
+  const sc=statsMode()?userCounts():null;
   let rows=users.map(u=>{
+    if(sc){
+      const s=sc[u.email]||{prompts:0, convs:new Set(), first:u.firstTs, last:u.lastTs};
+      return {...u, wConvs:s.convs.size, wPrompts:s.prompts, wFlagged:flByUser[u.email]||0, wFirst:s.first, wLast:s.last};
+    }
     const cs=convs.filter(c=>c.email===u.email && winIds.has(c.id));
     const prompts=cs.reduce((s,c)=>s+c.turns,0)+(flByUser[u.email]||0);
     return {...u, wConvs:cs.length, wPrompts:prompts, wFlagged:flByUser[u.email]||0,
@@ -2462,9 +2509,11 @@ function renderUserCharts(){
   const winIds=new Set(winConvs().map(c=>c.id));
   const flByUser={}; winFlagged().forEach(r=>{
     const e=r.email||UNATTRIBUTED; flByUser[e]=(flByUser[e]||0)+1; });
+  const sc=statsMode()?userCounts():null;
   const rows=users.map(u=>({
     email:u.email,
-    prompts:convs.filter(c=>c.email===u.email&&winIds.has(c.id)).reduce((s,c)=>s+c.turns,0),
+    prompts: sc ? (sc[u.email]?.prompts||0)
+               : convs.filter(c=>c.email===u.email&&winIds.has(c.id)).reduce((s,c)=>s+c.turns,0),
     flag:flByUser[u.email]||0,
   })).filter(r=>r.prompts||r.flag);
 
@@ -2873,9 +2922,11 @@ function exportViewCSV(){
     cols=['משתמש','פרומפטים','שיחות','חריגות','טוקנים','ראשון','אחרון','שיוך'];
     const winIds=new Set(winConvs().map(c=>c.id));
     const fb={}; winFlagged().forEach(r=>{const e=r.email||UNATTRIBUTED;fb[e]=(fb[e]||0)+1;});
+    const sc=statsMode()?userCounts():null;
     rows=users.map(u=>{
       const cs=convs.filter(c=>c.email===u.email&&winIds.has(c.id));
-      return [u.email, cs.reduce((s,c)=>s+c.turns,0)+(fb[u.email]||0), cs.length,
+      const s=sc&&(sc[u.email]||{prompts:0, convs:new Set()});
+      return [u.email, s ? s.prompts : cs.reduce((s,c)=>s+c.turns,0)+(fb[u.email]||0), s ? s.convs.size : cs.length,
         fb[u.email]||0, u.tokens, fmtTs(u.firstTs,1), fmtTs(u.lastTs,1),
         u.email===UNATTRIBUTED?'ללא שיוך':u.linked?'לפי זמן':'ישיר'];
     });

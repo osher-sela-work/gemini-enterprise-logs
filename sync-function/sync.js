@@ -39,6 +39,8 @@ const TEXT_LIKE_RE = /(^|\.)(text|content|contents|parts|messages|query|prompt|r
 const CONTEXT_COLS = new Set([
   'insertid', 'timestamp', 'receivetimestamp', 'logname', 'severity',
   'trace',                               // ties a chat turn to the row that names its user
+  'stats.question', 'stats.chat', 'stats.flagged', 'stats.blocked',   // so a chats-only reader counts the same (see addStats)
+  'linkeduser',
   'jsonpayload.@type',
   'jsonpayload.gen_ai.conversation.id',
   'jsonpayload.useriamprincipal',
@@ -51,9 +53,14 @@ const CONTEXT_COLS = new Set([
   'jsonpayload.request.name',
 ]);
 
+// Exact columns that look like text by their path but hold an id: a StreamAssist turn's answer name
+// (…/sessions/<chat>/assistAnswers/<turn>), which lets the report group a chat's turns without its text.
+const NOT_TEXT = new Set(['jsonpayload.response.answer.name']);
+
 const normHdr = h => String(h || '').replace(/^'+/, '').replace(/"/g, '').trim().toLowerCase();
 const underAny = (h, list) => list.some(p => h === p || h.startsWith(p + '.'));
 function isText(h) {
+  if (NOT_TEXT.has(h)) return false;
   if (TEXT_LIKE_RE.test(h)) return true;
   if (underAny(h, TEXT_EXCEPTIONS)) return false;
   return underAny(h, TEXT_PREFIXES);
@@ -104,15 +111,17 @@ function splitEntries(entries) {
 // does (notebooklm_enterprise_user_activity: request.userQuery, userIamPrincipal). The text goes to chats/ only, so
 // without chats access the report couldn't make that match. The sync can, while it holds both: it adds the
 // question's user to the check as `linkedUser` (an email, which metrics/ holds anyway), the nearest in time within
-// 10 minutes. Entries are changed in place.
+// 10 minutes. Entries are changed in place. A question whose check flagged it is added to `flaggedQuestions`.
+const isFlaggedCheck = p => p.sanitizationResult?.filterMatchState === 'MATCH_FOUND' ||
+  /BLOCK/.test(p.sanitizationResult?.sanitizationVerdict || '');
 const LINK_MS = 10 * 60 * 1000;
 const normText = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-function linkNotebookChecks(entries) {
+function linkNotebookChecks(entries, flaggedQuestions = new Set()) {
   const questions = {};
   for (const e of entries) {
     const p = e.jsonPayload || {};
     if (!/notebooklm_enterprise_user_activity/.test(e.logName || '') || !p.userIamPrincipal || !p.request?.userQuery) continue;
-    (questions[normText(p.request.userQuery)] ||= []).push({ email: p.userIamPrincipal, ts: Date.parse(e.timestamp) });
+    (questions[normText(p.request.userQuery)] ||= []).push({ email: p.userIamPrincipal, ts: Date.parse(e.timestamp), entry: e });
   }
   let linked = 0;
   for (const e of entries) {
@@ -126,9 +135,46 @@ function linkNotebookChecks(entries) {
       const gap = Math.abs(q.ts - ts);
       if (gap <= LINK_MS && (!best || gap < best.gap)) best = { ...q, gap };
     }
-    if (best) { e.linkedUser = best.email; linked++; }
+    if (!best) continue;
+    e.linkedUser = best.email; linked++;
+    if (isFlaggedCheck(p)) flaggedQuestions.add(best.entry);
   }
   return linked;
+}
+
+// ---- Stats columns ----
+
+// The report's counts come from these, so they are the same with or without chats/ access (no text in them):
+//   stats.question = 1  a user asked one question here: each Gemini Enterprise StreamAssist row (one per turn, also
+//                       when Model Armor blocked it) and each NotebookLM question (GenerateFreeForm…)
+//   stats.chat          the chat that question belongs to: the Gemini Enterprise session, or the NotebookLM notebook
+//   stats.flagged = 1   that question's Model Armor check flagged it (Gemini Enterprise: the check's
+//                       client_correlation_id ends with the turn's assistToken; NotebookLM: linkNotebookChecks)
+//   stats.blocked = 1   a Model Armor check of a user prompt that blocked it
+// Entries are changed in place.
+function addStats(entries, flaggedQuestions = new Set()) {
+  const flaggedTokens = new Set();
+  for (const e of entries) {
+    const p = e.jsonPayload || {};
+    const corr = String(e.labels?.['modelarmor.googleapis.com/client_correlation_id'] || '');
+    if (/SanitizeOperationLogEntry/.test(p['@type'] || '') && p.operationType === 'SANITIZE_USER_PROMPT'
+        && corr.startsWith('AS|') && isFlaggedCheck(p)) flaggedTokens.add(corr.split('|').pop());
+  }
+  for (const e of entries) {
+    const p = e.jsonPayload || {};
+    const method = p.logMetadata?.methodName || e.resource?.labels?.method || '';
+    if (method === 'StreamAssist') {
+      const session = (String(p.response?.answer?.name || '').match(/\/sessions\/([^/]+)/) || [])[1] || '';
+      const token = p.assistToken || p.response?.assistToken || '';
+      e.stats = { question: 1, chat: session, ...(flaggedTokens.has(token) ? { flagged: 1 } : {}) };
+    } else if (/notebooklm_enterprise_user_activity/.test(e.logName || '') && /^GenerateFreeForm/.test(method)) {
+      const nb = (String(p.request?.name || p.logMetadata?.name || '').match(/notebooks\/([^/]+)/) || [])[1] || '';
+      e.stats = { question: 1, chat: nb, ...(flaggedQuestions.has(e) ? { flagged: 1 } : {}) };
+    } else if (/SanitizeOperationLogEntry/.test(p['@type'] || '') && p.operationType === 'SANITIZE_USER_PROMPT'
+               && /BLOCK/.test(p.sanitizationResult?.sanitizationVerdict || '')) {
+      e.stats = { blocked: 1 };
+    }
+  }
 }
 
 // ---- Times in object names ----
@@ -203,7 +249,9 @@ async function sync({ request, project, bucket, filter, now = Date.now(), wait =
   const result = { from: new Date(from).toISOString(), to: new Date(to).toISOString(), entries: entries.length, chatRows: 0 };
   if (entries.length) {
     const base = `auto-${stamp(from)}_${stamp(to)}.csv`;
-    linkNotebookChecks(entries);
+    const flaggedQuestions = new Set();
+    linkNotebookChecks(entries, flaggedQuestions);
+    addStats(entries, flaggedQuestions);
     const parts = splitEntries(entries);
     // Chats first: if metrics then fails, the restricted half is the one already in place, never the other way round.
     if (parts.chats) await create(request, bucket, DIRS.chats + base, parts.chats, 'text/csv');
@@ -227,4 +275,4 @@ async function recordAccess({ request, bucket, viewer, viewed, reason, now = Dat
   return { name, ...entry };
 }
 
-module.exports = { sync, recordAccess, linkNotebookChecks, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR, ACCESS_DIR };
+module.exports = { sync, recordAccess, linkNotebookChecks, addStats, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR, ACCESS_DIR };
