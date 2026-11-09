@@ -926,6 +926,9 @@ function entryToRecord(e){
     kind,
     ts: parseTs(getAny(e,'timestamp','jsonPayload.logMetadata.timestamp','receiveTimestamp')),
     insertId: String(getAny(e,'insertId')||''),
+    // One chat turn's rows share it: the StreamAssist row (which names the
+    // user) and the gen_ai row (which holds the conversation, but no user).
+    trace: String(getAny(e,'trace')||'').split('/').pop(),
     email, emailSrc: email?'direct':'',
     // Which product the event came from — drives the UI badge and filters.
     product: kind==='notebooklm' ? 'NotebookLM'
@@ -960,7 +963,8 @@ function entryToRecord(e){
 // Worth parsing at all?
 function looksRelevant(r){
   return !!(r.ts && (r.promptText || r.convId || r.inputMsgs.length ||
-                     r.verdict || r.notebookId || r.answer));
+                     r.verdict || r.notebookId || r.answer ||
+                     (r.trace && r.email)));   // names the user of a chat turn
 }
 
 /* ── Google Cloud Storage ─────────────────────────────────── */
@@ -1602,6 +1606,11 @@ function finishLoad(){
 // thread so far. Concatenating rows would duplicate everything — the
 // fullest snapshot per conversation is the one to keep.
 function buildConversations(){
+  // gen_ai rows carry no user. The gemini_enterprise_user_activity row of the
+  // same turn (StreamAssist) does, under the same trace: an exact join.
+  const traceEmail={};
+  records.forEach(r=>{ if(r.kind!=='inference' && r.trace && r.email) traceEmail[r.trace]=r.email; });
+  const ownEmail=r=>r.email || traceEmail[r.trace] || '';
   const byConv={};
   records.filter(r=>r.kind==='inference').forEach(r=>{
     const id=r.convId || r.invocationId || r.insertId;
@@ -1625,8 +1634,8 @@ function buildConversations(){
     }));
     return {
       id: c.id,
-      email: c.recs.find(r=>r.email)?.email || '',
-      emailSrc: c.recs.find(r=>r.email) ? 'direct' : '',
+      email: ownEmail(c.recs.find(ownEmail) || {}),
+      emailSrc: c.recs.find(ownEmail) ? 'direct' : '',
       firstTs: c.recs[0].ts, lastTs: last.ts,
       agent: best.agentName||'', engineId: best.engineId||'',
       turns: prompts.length,

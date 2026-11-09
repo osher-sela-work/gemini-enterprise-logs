@@ -37,6 +37,7 @@ const TEXT_LIKE_RE = /(^|\.)(text|content|contents|parts|messages|query|prompt|r
 // Kept in chats as well, so a chats file still identifies, attributes and classifies each row on its own.
 const CONTEXT_COLS = new Set([
   'insertid', 'timestamp', 'receivetimestamp', 'logname', 'severity',
+  'trace',                               // ties a chat turn to the row that names its user
   'jsonpayload.@type',
   'jsonpayload.gen_ai.conversation.id',
   'jsonpayload.useriamprincipal',
@@ -123,7 +124,8 @@ async function lastSync(request, bucket) {
 // All entries of the filter in [from, to), oldest first. Cloud Logging allows about 60 reads a minute per project:
 // a refused page waits and tries again.
 async function readEntries(request, project, filter, fromMs, toMs, wait) {
-  const full = `${filter} AND timestamp>="${new Date(fromMs).toISOString()}" AND timestamp<"${new Date(toMs).toISOString()}"`;
+  // The filter in parentheses: it may be several conditions joined with OR.
+  const full = `(${filter}) AND timestamp>="${new Date(fromMs).toISOString()}" AND timestamp<"${new Date(toMs).toISOString()}"`;
   const entries = [];
   let pageToken = '';
   do {
