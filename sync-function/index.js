@@ -21,16 +21,19 @@ const { sync } = require('./sync');
 const { LOG_PROJECT, BUCKET, CLIENT_ID } = process.env;
 const DOMAINS = String(process.env.ALLOWED_DOMAIN || '').split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
 // Gemini Enterprise: the gen_ai.* logs and gemini_enterprise_user_activity (its StreamAssist rows, resource.type
-// consumed_api, are the only ones that name a chat's user). With GE_APP set, of that one app only: its engine id
-// must appear somewhere in the entry. NotebookLM Enterprise and Model Armor rows name no app, so all are kept.
+// consumed_api, are the only ones that name a chat's user). NotebookLM Enterprise. Model Armor's checks of both.
+// With GE_APP set, Gemini Enterprise of that one app only: its engine id must appear somewhere in the entry. A Model
+// Armor check names its app the same way (client_correlation_id "AS|…/engines/<app>/…"), NotebookLM's start "NLM|".
 // In the Logging query language AND binds looser than OR, hence the parentheses.
-const GE_APP = String(process.env.GE_APP || '').trim();
+const GE_APP = String(process.env.GE_APP || '').trim().replace(/"/g, '');
 const GEMINI = 'resource.type="discoveryengine.googleapis.com/Agent"' +
   ' OR log_id("discoveryengine.googleapis.com/gemini_enterprise_user_activity")';
-const DEFAULT_FILTER =
-  (GE_APP ? `((${GEMINI}) AND "${GE_APP.replace(/"/g, '')}")` : `(${GEMINI})`) +
-  ' OR resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"' +
-  ' OR resource.type="modelarmor.googleapis.com/SanitizeOperation"';
+const NOTEBOOKLM = 'resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"';
+const ARMOR = 'resource.type="modelarmor.googleapis.com/SanitizeOperation"';
+const NLM_CHECK = 'labels."modelarmor.googleapis.com/client_correlation_id"=~"^NLM\\|"';
+const DEFAULT_FILTER = GE_APP
+  ? `((${GEMINI}) AND "${GE_APP}") OR ${NOTEBOOKLM} OR (${ARMOR} AND ("${GE_APP}" OR ${NLM_CHECK}))`
+  : `(${GEMINI}) OR ${NOTEBOOKLM} OR ${ARMOR}`;
 const LOG_FILTER = process.env.LOG_FILTER || DEFAULT_FILTER;
 
 const auth = new GoogleAuth({
