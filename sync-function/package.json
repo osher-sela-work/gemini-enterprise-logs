@@ -1,0 +1,16 @@
+{
+  "name": "ge-log-sync",
+  "private": true,
+  "description": "Cloud Logging -> GCS sync for the Gemini Enterprise usage report",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "functions-framework --target=sync"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "5.0.5",
+    "google-auth-library": "11.3.1"
+  }
+}

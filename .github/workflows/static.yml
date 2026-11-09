@@ -31,6 +31,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # The sync function's URL comes from the SYNC_URL repository secret, not from the code
+      - name: Insert the sync function's URL
+        env:
+          SYNC_URL: ${{ secrets.SYNC_URL }}
+        run: |
+          if [ -z "$SYNC_URL" ]; then echo "::error::The SYNC_URL repository secret isn't set."; exit 1; fi
+          grep -q "__SYNC_URL__" index.html || { echo "::error::index.html has no __SYNC_URL__ placeholder."; exit 1; }
+          sed -i "s|__SYNC_URL__|${SYNC_URL%/}|g" index.html
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

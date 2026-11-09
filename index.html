@@ -89,14 +89,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 /* ── main ── */
 main{padding:22px 26px;max-width:1440px;margin:0 auto;}
 
-/* ── upload ── */
-#upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:52px 24px;
-  text-align:center;cursor:pointer;transition:.2s;background:var(--surface);}
-#upload-zone:hover,#upload-zone.drag{border-color:var(--gem);background:var(--surface2);}
-#upload-zone h2{font-size:17px;font-weight:600;margin-bottom:8px;}
-#upload-zone p{color:var(--muted);font-size:13px;}
-#upload-zone .hint{font-size:11px;color:var(--muted);opacity:.75;margin-top:16px;line-height:1.7;}
-#file-input,#snap-input{display:none;}
+#snap-input{display:none;}
 
 /* ── controls ── */
 #controls{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
@@ -251,6 +244,52 @@ footer{text-align:center;padding:22px;font-size:11px;color:var(--muted);opacity:
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #loader-track{width:280px;height:5px;background:var(--surface2);border-radius:4px;overflow:hidden;}
 #loader-bar{height:100%;width:0;background:linear-gradient(90deg,#8AB4F8,#AB47BC);transition:width .3s ease;}
+
+/* ── GCS picker ── */
+#gcs-modal{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);
+  align-items:center;justify-content:center;padding:16px;}
+#gcs-modal.on{display:flex;}
+.gcs-box{width:min(720px,100%);max-height:85vh;display:flex;flex-direction:column;}
+.gcs-box .card-body{display:flex;flex-direction:column;gap:10px;min-height:0;}
+.gcs-row{display:flex;gap:8px;flex-wrap:wrap;}
+.gcs-row input{flex:1;min-width:160px;padding:6px 10px;border-radius:8px;font-size:12px;
+  border:1px solid var(--border);background:var(--surface2);color:var(--text);}
+#gcs-status{font-size:12px;color:var(--muted);white-space:pre-line;}
+#gcs-status.err{color:var(--err);}
+#gcs-list{overflow:auto;min-height:0;border:1px solid var(--border);border-radius:8px;display:none;}
+#gcs-list label{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer;
+  border-bottom:1px solid var(--border);direction:ltr;}
+#gcs-list label:last-child{border-bottom:none;}
+#gcs-list label:hover{background:var(--surface2);}
+#gcs-list .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#gcs-list .meta{color:var(--muted);font-size:11px;white-space:nowrap;}
+.gcs-foot{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);}
+#gcs-dirs{align-self:flex-start;}
+
+/* ── sign-in gate ── */
+#gate{display:none;text-align:center;padding:52px 24px;}
+#gate.on{display:block;}
+#gate h2{font-size:17px;font-weight:600;margin-bottom:8px;}
+#gate p{color:var(--muted);font-size:13px;margin-bottom:18px;white-space:pre-line;}
+#gate-btn:empty{display:none;}
+/* While the gate is up (signing in, loading, no access) the page shows only
+   the gate: no report panels, no export/upload/help buttons. */
+body.gated main > :not(#gate),
+body.gated .hdr-btns > :not(#btn-theme):not(#gcs-user){display:none !important;}
+body.gated #gate{max-width:440px;margin:12vh auto 0;}
+#gcs-user{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);}
+#gcs-user:empty{display:none;}
+#gcs-access{display:none;flex-direction:column;gap:14px;overflow:auto;min-height:0;}
+.acc-sec{display:flex;flex-direction:column;gap:8px;}
+.acc-sec h4{font-size:13px;font-weight:600;}
+.acc-list{border:1px solid var(--border);border-radius:8px;}
+.acc-row{display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:12px;border-bottom:1px solid var(--border);}
+.acc-row:last-child{border-bottom:none;}
+.acc-id{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.acc-kind{font-size:11px;color:var(--muted);}
+.acc-empty{padding:8px 10px;font-size:12px;color:var(--muted);}
+.gcs-row select{padding:6px 8px;border-radius:8px;font-size:12px;
+  border:1px solid var(--border);background:var(--surface2);color:var(--text);}
 </style>
 </head>
 <body>
@@ -259,6 +298,33 @@ footer{text-align:center;padding:22px;font-size:11px;color:var(--muted);opacity:
   <div class="ring"></div>
   <div id="loader-name"></div>
   <div id="loader-track"><div id="loader-bar"></div></div>
+</div>
+
+<div id="gcs-modal" onclick="if(event.target===this)closeGcs()">
+  <div class="card gcs-box">
+    <div class="card-hdr">
+      <h3>☁ טעינה מ-Google Cloud Storage</h3>
+      <span class="sub" id="gcs-who"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-icon" onclick="closeGcs()" title="סגור">✕</button>
+    </div>
+    <div class="card-body">
+      <div class="segs" id="gcs-dirs">
+        <button class="seg" data-d="metrics" onclick="gcsList('metrics')">📊 מדדים</button>
+        <button class="seg" data-d="chats"   onclick="gcsList('chats')">💬 שיחות</button>
+        <button class="seg" data-d="access"  onclick="gcsShowAccess()" id="gcs-admin-seg" style="display:none">🔐 הרשאות</button>
+      </div>
+      <div id="gcs-status"></div>
+      <div id="gcs-list"></div>
+      <div id="gcs-access"></div>
+      <div class="gcs-foot" id="gcs-foot">
+        <label><input type="checkbox" id="gcs-all" onchange="gcsToggleAll(this.checked)"/> בחר הכל</label>
+        <span id="gcs-count"></span>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="gcs-load" onclick="gcsLoad()" disabled>טען נבחרים</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <header>
@@ -271,25 +337,21 @@ footer{text-align:center;padding:22px;font-size:11px;color:var(--muted);opacity:
   </div>
   <div class="hdr-btns">
     <button class="btn btn-icon" onclick="toggleTheme()" title="החלף ערכת נושא" id="btn-theme">🌙</button>
-    <button class="btn btn-icon" onclick="openHelp()" title="עזרה — איך להוציא את הלוגים">?</button>
-    <input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" onchange="handleFiles(this.files)"/>
-    <button class="btn" onclick="document.getElementById('file-input').click()">⬆ טעינת קבצים</button>
+    <span id="gcs-up"></span>
+    <button class="btn" id="btn-gcs" onclick="openGcs()" title="טעינה מ-Google Cloud Storage">☁ GCS</button>
     <button class="btn" onclick="exportViewCSV()">⬇ CSV</button>
     <button class="btn btn-primary" onclick="exportPNG()">↓ ייצוא PNG</button>
+    <span id="gcs-user"></span>
   </div>
 </header>
 
 <main>
 
-  <div id="upload-zone" onclick="document.getElementById('file-input').click()"
-       ondragover="dz(event,1)" ondragleave="dz(event,0)" ondrop="dzDrop(event)">
+  <div id="gate" class="card">
     <div style="font-size:36px;margin-bottom:12px">✦</div>
-    <h2>גרור לכאן את יומני ה-Gemini Enterprise</h2>
-    <p>ייצוא CSV/TSV מ-Cloud Logging (Log Explorer → Download)</p>
-    <div class="hint">
-      נתמכים: <b>gen_ai.client.inference.operation.details</b> (שיחות) · <b>ModelArmorAudit</b> (סינון בטיחות)<br>
-      אפשר להעלות כמה קבצים יחד — הם ימוזגו לפי מזהה שיחה.
-    </div>
+    <h2 id="gate-title"></h2>
+    <p id="gate-msg"></p>
+    <button class="btn btn-primary" id="gate-btn"></button>
   </div>
 
   <div id="controls">
@@ -414,8 +476,9 @@ if(typeof ChartDataLabels!=='undefined') Chart.register(ChartDataLabels);
 /* ═══════════════════════════════════════════════════════════════
    Gemini Enterprise usage report — single-file, offline, no build.
 
-   Input: Cloud Logging exports (CSV / TSV / JSON / NDJSON) of the
-   Gemini Enterprise agent logs. Two record shapes matter:
+   Input: the Gemini Enterprise agent logs, pulled from the Cloud Logging
+   API into GCS by the sync function (sync-function/, see logSync) and
+   read back from there. Two record shapes matter:
 
      • gen_ai.client.inference.operation.details  (severity INFO)
        Carries the whole conversation in gen_ai.input.messages,
@@ -531,20 +594,6 @@ function toggleTheme(){
   }catch(_){}
 })();
 
-function openHelp(){
-  alert(
-    'איך מוציאים את הנתונים:\n\n'+
-    '1. Google Cloud Console → Logging → Logs Explorer\n'+
-    '2. שאילתה, למשל:\n'+
-    '   resource.type="discoveryengine.googleapis.com/Agent"\n'+
-    '3. בוחרים טווח זמן ולוחצים Run query\n'+
-    '4. Actions → Download → CSV או JSON\n\n'+
-    'מומלץ JSON: ייצוא ל-CSV שנפתח ב-Excel פוגם בשדות ארוכים '+
-    '(מספרי פרויקט הופכים לכתיב מדעי, וטקסט מקבל גרש מוביל).\n\n'+
-    'אפשר להעלות כמה קבצים יחד — שיחות ממוזגות לפי conversation id.'
-  );
-}
-
 /* ── Loader ───────────────────────────────────────────────── */
 function showLoader(label){
   $('loader-name').textContent=label||'';
@@ -553,10 +602,6 @@ function showLoader(label){
 }
 function setProgress(p){ $('loader-bar').style.width=Math.max(0,Math.min(100,p))+'%'; }
 function hideLoader(){ setProgress(100); setTimeout(()=>{ $('loader').style.display='none'; },260); }
-
-/* ── Drag & drop ──────────────────────────────────────────── */
-function dz(e,on){ e.preventDefault(); $('upload-zone').classList.toggle('drag',!!on); }
-function dzDrop(e){ e.preventDefault(); $('upload-zone').classList.remove('drag'); handleFiles(e.dataTransfer.files); }
 
 /* ═══ Text repair ══════════════════════════════════════════ */
 
@@ -917,25 +962,563 @@ function looksRelevant(r){
   return !!(r.ts && (r.promptText || r.convId || r.inputMsgs.length ||
                      r.verdict || r.notebookId || r.answer));
 }
-/* ── File ingestion ───────────────────────────────────────── */
-function handleFiles(files){
-  const list=Array.from(files||[]);
-  if(!list.length) return;
-  showLoader(list.length===1?list[0].name:`${list.length} קבצים`);
-  let done=0;
-  const step=()=>{ done++; setProgress(10+80*done/list.length);
-    if(done===list.length){ finishLoad(); } };
-  list.forEach(f=>{
-    const r=new FileReader();
-    r.onerror=step;
-    r.onload=e=>{
-      try{ ingestText(String(e.target.result||''), f.name); }
-      catch(err){ parseWarnings.push(`${f.name}: ${err.message}`); }
-      step();
-    };
-    r.readAsText(f,'utf-8');
+
+/* ── Google Cloud Storage ─────────────────────────────────── */
+// Objects are read with the signed-in user's own OAuth token, so what they
+// can load is exactly what IAM grants them on the bucket. Nothing secret
+// ships in the page: an OAuth client ID is public by design.
+// Setup: OAuth "Web application" client with this page's origin under
+// Authorized JavaScript origins, plus a CORS rule on the bucket.
+const GCS_CLIENT_ID = '569858054254-dbnl4e84molmbp75odtf144i4rb266rv.apps.googleusercontent.com';   // e.g. '1234-abc.apps.googleusercontent.com'
+// The log sync (the Cloud Run function in sync-function/) saves every sync
+// split into these two folders; IAM on each folder decides who can read it.
+const GCS_BUCKET = 'icl-database';
+const GCS_DIRS = { metrics:'metrics/', chats:'chats/' };
+// The function's URL. Called every time someone opens the report, with the
+// signed-in user's token; it pulls the new logs from Cloud Logging with its
+// own service account, so nobody here needs access to the logs or can write.
+// The publishing workflow (.github/workflows/static.yml) puts it in from the
+// SYNC_URL repository secret, so it isn't in the code; the published page
+// still holds it, as the browser needs it to call the function.
+const SYNC_URL = '__SYNC_URL__';
+const syncConfigured = ()=>/^https:\/\//.test(SYNC_URL);
+const GCS_SCOPE_RO = 'https://www.googleapis.com/auth/devstorage.read_only';
+const GCS_SCOPE_FC = 'https://www.googleapis.com/auth/devstorage.full_control';  // IAM edits only
+// Which already-held tokens satisfy a request for each scope.
+const GCS_SCOPE_COVER = {
+  [GCS_SCOPE_RO]:[GCS_SCOPE_RO,GCS_SCOPE_FC],
+  [GCS_SCOPE_FC]:[GCS_SCOPE_FC],
+};
+const GCS_API    = 'https://storage.googleapis.com/storage/v1/b/';
+const GCS_EXT_RE = /\.(csv|tsv|txt|json|jsonl)$/i;
+const GCS_MAX_LIST = 5000;
+// Everyone gets a read-only token; full control is requested only for an
+// admin's IAM edits. IAM still decides what either can touch.
+const gcsTok={};            // scope -> {token, exp}
+const gcsTokenClients={};   // scope -> GIS token client
+let gcsPending=null;
+let gcsObjects=[];
+let gcsGis=null;
+let gcsUser=null;           // {email} once signed in
+let gcsCaps=null;           // what IAM lets this user do — see gcsLoadCaps
+
+function gcsLoadGis(){
+  if(window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+  if(!gcsGis) gcsGis=new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://accounts.google.com/gsi/client'; s.async=true;
+    s.onload=()=>res();
+    s.onerror=()=>{ gcsGis=null; rej(new Error('לא ניתן לטעון את Google Sign-In (בדוק חיבור לרשת).')); };
+    document.head.appendChild(s);
   });
-  $('file-input').value='';
+  return gcsGis;
+}
+
+async function gcsGetToken(scope){
+  scope=scope||GCS_SCOPE_RO;
+  // A wider token covers narrower requests, so reuse one if we have it.
+  for(const s of GCS_SCOPE_COVER[scope]){
+    const t=gcsTok[s];
+    if(t && Date.now()<t.exp-60000) return t.token;
+  }
+  if(!GCS_CLIENT_ID) throw new Error('GCS_CLIENT_ID לא הוגדר ב-app.js.');
+  if(location.protocol==='file:')
+    throw new Error('התחברות Google דורשת http(s) — פתח את הדף המפורסם או הרץ serve.ps1.');
+  await gcsLoadGis();
+  if(!gcsTokenClients[scope]) gcsTokenClients[scope]=google.accounts.oauth2.initTokenClient({
+    client_id:GCS_CLIENT_ID,
+    // The sign-in doubles as identity: the email names the session.
+    scope: scope===GCS_SCOPE_RO ? `${scope} openid email` : scope,
+    // A later upgrade (admin) stays on the account already signed in.
+    hint: gcsUser ? gcsUser.email : undefined,
+    callback:r=>{
+      const p=gcsPending; gcsPending=null; if(!p) return;
+      if(r.error) return p.rej(new Error(r.error_description||r.error));
+      gcsTok[scope]={token:r.access_token, exp:Date.now()+(parseInt(r.expires_in,10)||3600)*1000};
+      if(scope===GCS_SCOPE_RO && gcsUser) gcsSaveSession();   // a re-sign-in extends the session
+      p.res(r.access_token);
+    },
+    error_callback:e=>{
+      const p=gcsPending; gcsPending=null;
+      if(p) p.rej(new Error(e.type==='popup_closed'?'ההתחברות בוטלה.':(e.message||e.type)));
+    },
+  });
+  return new Promise((res,rej)=>{
+    gcsPending={res,rej};
+    gcsTokenClients[scope].requestAccessToken({prompt:Object.keys(gcsTok).length?'':'select_account'});
+  });
+}
+
+async function gcsFetch(url, opts, retried){
+  opts=opts||{};
+  const scope=opts.scope||GCS_SCOPE_RO;
+  const tok=await gcsGetToken(scope);
+  let r;
+  try{
+    r=await fetch(url,{method:opts.method||'GET', body:opts.body,
+      headers:Object.assign({Authorization:`Bearer ${tok}`}, opts.headers)});
+  }
+  catch(_){ throw new Error('הבקשה נחסמה — כנראה חסרה הגדרת CORS על ה-bucket עבור '+location.origin); }
+  if(r.status===401 && !retried){ delete gcsTok[scope]; return gcsFetch(url,opts,true); }
+  if(!r.ok){
+    let msg=r.statusText;
+    try{ msg=(await r.json()).error.message||msg; }catch(_){}
+    if(r.status===403) msg='אין הרשאה (IAM) — '+msg;
+    if(r.status===404) msg='לא נמצא — '+msg;
+    throw new Error(`${r.status}: ${msg}`);
+  }
+  return r;
+}
+
+function gcsStatus(msg,isErr){
+  const s=$('gcs-status'); s.textContent=msg||''; s.classList.toggle('err',!!isErr);
+}
+
+function gcsConfigError(){
+  if(!GCS_CLIENT_ID) return 'GCS_CLIENT_ID לא הוגדר ב-app.js.';
+  if(!GCS_BUCKET)    return 'GCS_BUCKET לא הוגדר ב-app.js.';
+  if(location.protocol==='file:')
+    return 'התחברות Google דורשת http(s) — פתח את הדף המפורסם או הרץ serve.ps1.';
+  return '';
+}
+
+function openGcs(){
+  $('gcs-modal').classList.add('on');
+  const err=gcsConfigError();
+  if(err){ gcsStatus(err,true); return; }
+  // Preload so the sign-in popup opens inside the click's user activation.
+  gcsLoadGis().catch(()=>{});
+  if(!gcsObjects.length) gcsStatus('בחר תיקייה.');
+}
+function closeGcs(){ $('gcs-modal').classList.remove('on'); }
+
+async function gcsList(which){
+  const err=gcsConfigError();
+  if(err){ gcsStatus(err,true); return; }
+  const prefix=GCS_DIRS[which];
+  document.querySelectorAll('#gcs-dirs .seg').forEach(b=>b.classList.toggle('on',b.dataset.d===which));
+
+  gcsStatus('טוען רשימת קבצים…');
+  gcsObjects=[];
+  $('gcs-access').style.display='none'; $('gcs-foot').style.display='flex';
+  $('gcs-list').style.display='none'; $('gcs-load').disabled=true; $('gcs-count').textContent='';
+  try{
+    const {items, truncated}=await gcsListObjects(prefix);
+    gcsObjects=items;
+    gcsRenderList(truncated);
+  }catch(err){
+    gcsStatus(/^403/.test(err.message)?'אין לך הרשאה לתיקייה הזו.':err.message,true);
+  }
+}
+
+// Newest first; only file types the report can read.
+async function gcsListObjects(prefix){
+  const items=[]; let pageToken='';
+  do{
+    const q=new URLSearchParams({prefix, maxResults:'1000',
+      fields:'items(name,size,updated),nextPageToken'});
+    if(pageToken) q.set('pageToken',pageToken);
+    const j=await (await gcsFetch(`${GCS_API}${encodeURIComponent(GCS_BUCKET)}/o?${q}`)).json();
+    // Filtered here, so the sync markers under metrics/sync/ don't count against the cap.
+    items.push(...(j.items||[]).filter(o=>GCS_EXT_RE.test(o.name)));
+    pageToken=j.nextPageToken;
+  }while(pageToken && items.length<GCS_MAX_LIST);
+  return {
+    items: items.sort((a,b)=>String(b.updated).localeCompare(String(a.updated))),
+    truncated: !!pageToken,
+  };
+}
+
+async function gcsIngestObjects(objs, label){
+  showLoader(label);
+  let done=0;
+  for(const o of objs){
+    try{
+      const r=await gcsFetch(`${GCS_API}${encodeURIComponent(GCS_BUCKET)}/o/${encodeURIComponent(o.name)}?alt=media`);
+      ingestText(await r.text(), o.name.split('/').pop());
+    }catch(err){ parseWarnings.push(`${o.name}: ${err.message}`); }
+    setProgress(10+80*(++done)/objs.length);
+  }
+  finishLoad();
+}
+
+function gcsRenderList(truncated){
+  const list=$('gcs-list');
+  if(!gcsObjects.length){
+    gcsStatus('אין קבצים בתיקייה הזו.'); list.style.display='none'; return;
+  }
+  const kb=n=>{ n=+n||0; return n<1048576?`${Math.ceil(n/1024)} KB`:`${(n/1048576).toFixed(1)} MB`; };
+  list.innerHTML=gcsObjects.map((o,i)=>
+    `<label><input type="checkbox" value="${i}" onchange="gcsSync()"/>`+
+    `<span class="nm" title="${esc(o.name)}">${esc(o.name)}</span>`+
+    `<span class="meta">${kb(o.size)} · ${fmtTs(Date.parse(o.updated))}</span></label>`).join('');
+  list.style.display='block';
+  $('gcs-all').checked=false;
+  gcsStatus(`${gcsObjects.length} קבצים`+(truncated?` (מוצגים ${GCS_MAX_LIST} הראשונים)`:''));
+  gcsSync();
+}
+
+function gcsToggleAll(on){
+  document.querySelectorAll('#gcs-list input').forEach(c=>{ c.checked=on; });
+  gcsSync();
+}
+function gcsSync(){
+  const n=document.querySelectorAll('#gcs-list input:checked').length;
+  $('gcs-count').textContent=n?`${n} נבחרו`:'';
+  $('gcs-load').disabled=!n;
+}
+
+async function gcsLoad(){
+  const picked=Array.from(document.querySelectorAll('#gcs-list input:checked'))
+    .map(c=>gcsObjects[+c.value]).filter(Boolean);
+  if(!picked.length) return;
+  closeGcs();
+  await gcsIngestObjects(picked, picked.length===1?picked[0].name:`${picked.length} קבצים מ-GCS`);
+}
+
+/* ── Folder access (admins only) ──────────────────────────── */
+// Edits the managed folder's own IAM policy, so the page needs no server:
+// Google checks that the signed-in user may change it. Only plain
+// objectViewer bindings are touched — uploader grants, conditional
+// bindings and every other role are passed back unchanged.
+const GCS_VIEWER = 'roles/storage.objectViewer';
+const GCS_ACCESS_LABEL = { chats:'💬 שיחות', metrics:'📊 מדדים' };
+// Only chats access is managed here; metrics is open to the whole domain
+// through a fixed grant, so new uploads are readable without anyone acting.
+const GCS_MANAGED = ['chats'];
+let gcsPolicies={};
+
+const gcsFolderIam=which=>
+  `${GCS_API}${encodeURIComponent(GCS_BUCKET)}/managedFolders/${encodeURIComponent(GCS_DIRS[which])}/iam`;
+
+/* ── Session: sign-in gate, capabilities, auto-load ──────── */
+// With a bucket configured the page opens on a sign-in screen, then shows
+// only what this user's IAM allows and loads the data by itself. Hiding a
+// button is convenience, not security: GCS refuses anything IAM doesn't
+// grant regardless of what the page shows.
+const GCS_SESSION_KEY = 'ge-gcs-session';
+const gcsGated = ()=>!gcsConfigError();
+
+function gcsSaveSession(){
+  const t=gcsTok[GCS_SCOPE_RO];
+  // Only the short-lived read-only token is kept; the admin token is
+  // re-requested per page load. It expires with Google's token (~1h).
+  try{ localStorage.setItem(GCS_SESSION_KEY, JSON.stringify({email:gcsUser.email, token:t.token, exp:t.exp})); }catch(_){}
+}
+function gcsRestoreSession(){
+  try{
+    const s=JSON.parse(localStorage.getItem(GCS_SESSION_KEY)||'null');
+    if(s && s.token && s.email && Date.now()<s.exp-60000){
+      gcsTok[GCS_SCOPE_RO]={token:s.token, exp:s.exp};
+      gcsUser={email:s.email};
+      return true;
+    }
+    localStorage.removeItem(GCS_SESSION_KEY);
+  }catch(_){}
+  return false;
+}
+
+function gcsGate(title, msg, btnLabel, onClick){
+  $('gate-title').textContent=title||'';
+  $('gate-msg').textContent=msg||'';
+  const b=$('gate-btn'); b.textContent=btnLabel||''; b.onclick=onClick||null;
+  $('gate').classList.add('on');
+  document.body.classList.add('gated');
+}
+const gcsUngate=()=>{ $('gate').classList.remove('on'); document.body.classList.remove('gated'); };
+
+// Which controls this user gets. One testPermissions call per folder,
+// with the read-only token — nobody is asked for more access just to find
+// out they don't have it. A folder that isn't set up yet reads as "none".
+async function gcsLoadCaps(){
+  const perms=['storage.managedFolders.setIamPolicy'];
+  const has={};
+  for(const which of Object.keys(GCS_DIRS)){
+    try{
+      const q=new URLSearchParams(); perms.forEach(p=>q.append('permissions',p));
+      const j=await (await gcsFetch(`${gcsFolderIam(which)}/testPermissions?${q}`)).json();
+      has[which]=new Set(j.permissions||[]);
+    }catch(err){ console.warn(`testPermissions ${which}:`,err.message); has[which]=new Set(); }
+  }
+  // Read access is probed the way the auto-load uses it: list the folder,
+  // then fetch one object's metadata. Listing alone isn't enough — the
+  // legacy bucket-reader grant GCS gives project viewers can list but not
+  // read, which would show a chats folder that then fails to load.
+  const canRead=async which=>{
+    try{
+      const q=new URLSearchParams({prefix:GCS_DIRS[which], maxResults:'1', fields:'items(name)'});
+      const j=await (await gcsFetch(`${GCS_API}${encodeURIComponent(GCS_BUCKET)}/o?${q}`)).json();
+      const first=(j.items||[])[0];
+      if(first) await gcsFetch(`${GCS_API}${encodeURIComponent(GCS_BUCKET)}/o/${encodeURIComponent(first.name)}?fields=name`);
+      return true;
+    }catch(err){ if(!/^403/.test(err.message)) console.warn(`read ${which}:`,err.message); return false; }
+  };
+  const can=(w,p)=>has[w].has(p);
+  const mayEditIam=can('chats','storage.managedFolders.setIamPolicy');
+  gcsCaps={
+    readMetrics: await canRead('metrics'),
+    readChats:   false,
+    admin:       false,
+    adminVerified: false,
+  };
+  if(mayEditIam){
+    // Owners and Storage Admins can edit IAM too; the panel is only for
+    // whoever holds the named role. If the policy can't be read yet (scope
+    // or permission), the tab stays and gcsShowAccess settles it.
+    try{
+      gcsCaps.admin=await gcsHoldsAdminRole(GCS_SCOPE_RO);
+      gcsCaps.adminVerified=true;
+    }catch(err){ console.warn('admin role check:',err.message); gcsCaps.admin=true; }
+  }
+  // Chats need both: GCS lets them read, and they hold a named role — the
+  // chats reader role, or a confirmed admin role. Owners and bucket-wide
+  // readers pass the first but not the second, so the page doesn't show
+  // them chats.
+  let chatsRole=gcsCaps.admin && gcsCaps.adminVerified;
+  if(!chatsRole){
+    try{ chatsRole=await gcsHoldsRole(gcsFolderIam('chats'), GCS_CHATS_ROLE_ID, GCS_SCOPE_RO); }
+    catch(err){ if(!/^403/.test(err.message)) console.warn('chats role check:',err.message); }
+  }
+  gcsCaps.readChats=chatsRole && await canRead('chats');
+}
+
+// The admin panel and chats follow explicit grants of these custom roles to
+// the signed-in user — not raw permissions, which a project Owner has
+// anyway. Admin is granted on the bucket, chats reader on the chats folder.
+// Grant them to users directly; membership via a group isn't resolved.
+// Matched by role id; the project id is learned from the admin's binding.
+const GCS_ADMIN_ROLE_ID = 'GEStorageAdmin';
+const GCS_CHATS_ROLE_ID = 'GEChatsReader';
+let gcsProjectId='';
+
+async function gcsHoldsRole(iamUrl, roleId, scope){
+  const pol=await (await gcsFetch(`${iamUrl}?optionsRequestedPolicyVersion=3`,{scope})).json();
+  const me='user:'+gcsUser.email;
+  const b=(pol.bindings||[]).find(b=>!b.condition &&
+    String(b.role).endsWith('/roles/'+roleId) &&
+    (b.members||[]).some(m=>m.toLowerCase()===me));
+  if(b){ const m=String(b.role).match(/^projects\/([^/]+)\/roles\//); if(m) gcsProjectId=m[1]; }
+  return !!b;
+}
+const gcsHoldsAdminRole=scope=>
+  gcsHoldsRole(`${GCS_API}${encodeURIComponent(GCS_BUCKET)}/iam`, GCS_ADMIN_ROLE_ID, scope);
+
+// The role the panel grants: the chats reader role on chats, plain viewer
+// elsewhere.
+const gcsReaderRole=which=>
+  which==='chats' ? `projects/${gcsProjectId}/roles/${GCS_CHATS_ROLE_ID}` : GCS_VIEWER;
+
+function gcsApplyCaps(){
+  const c=gcsCaps||{};
+  $('btn-gcs').style.display=c.admin?'':'none';
+  document.querySelector('#gcs-dirs [data-d="metrics"]').style.display=c.readMetrics?'':'none';
+  document.querySelector('#gcs-dirs [data-d="chats"]').style.display=c.readChats?'':'none';
+  $('gcs-admin-seg').style.display=c.admin?'':'none';
+  $('gcs-user').innerHTML=gcsUser
+    ? `<span dir="ltr">${esc(gcsUser.email)}</span>`+
+      `<button class="btn" onclick="gcsLogout()" title="התנתק">התנתק</button>` : '';
+}
+
+async function gcsLogin(){
+  gcsGate('מתחבר…','');
+  try{
+    const token=await gcsGetToken(GCS_SCOPE_RO);
+    const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',
+      {headers:{Authorization:`Bearer ${token}`}});
+    const info=r.ok?await r.json():{};
+    if(!info.email) throw new Error('לא ניתן לזהות את החשבון.');
+    gcsUser={email:String(info.email).toLowerCase()};
+    gcsSaveSession();
+    await gcsStart();
+  }catch(err){
+    gcsGate('התחברות','ההתחברות נכשלה: '+err.message,'נסה שוב',gcsLogin);
+  }
+}
+
+function gcsLogout(){
+  try{ localStorage.removeItem(GCS_SESSION_KEY); }catch(_){}
+  const tokens=Object.values(gcsTok).map(t=>t.token);
+  const done=()=>location.reload();
+  if(window.google && google.accounts && google.accounts.oauth2 && tokens.length){
+    let left=tokens.length;
+    tokens.forEach(t=>google.accounts.oauth2.revoke(t,()=>{ if(--left===0) done(); }));
+    setTimeout(done,1500);   // don't hang on a slow revoke
+  } else done();
+}
+
+async function gcsStart(){
+  gcsGate('טוען…','בודק הרשאות');
+  await gcsLoadCaps();
+  gcsApplyCaps();
+  // Every opening brings the bucket up to date first; a failed sync still
+  // loads what's there.
+  try{ await logSync(); }
+  catch(err){ console.warn('log sync:',err.message); gcsUpState('err','☁ עדכון הלוגים נכשל',err.message); }
+  await gcsAutoLoad();
+}
+
+// Asks the sync function (sync-function/) to pull the logs written since the
+// last sync into the bucket. It runs with its own service account; the
+// user's read-only token only shows it who's asking.
+async function logSync(){
+  if(!syncConfigured()){ gcsUpState('err','☁ עדכון הלוגים לא הוגדר','ה-secret ‏SYNC_URL לא הוגדר ב-GitHub'); return; }
+  gcsGate('מעדכן לוגים…','מושך את הלוגים החדשים מ-Cloud Logging');
+  let r;
+  try{
+    r=await fetch(SYNC_URL,{method:'POST', headers:{Authorization:`Bearer ${await gcsGetToken(GCS_SCOPE_RO)}`}});
+  }catch(_){ throw new Error('לא ניתן להגיע לפונקציית העדכון ('+SYNC_URL+')'); }
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.error||`${r.status}`);
+  gcsUpState('ok',`☁ ${j.entries} רשומות חדשות`,`${fmtTs(Date.parse(j.from),true)} – ${fmtTs(Date.parse(j.to),true)}`);
+}
+
+// Everything the user may read, metrics plus chats when allowed. The two
+// halves merge back by insertId in finishLoad.
+async function gcsAutoLoad(){
+  const c=gcsCaps||{};
+  if(!c.readMetrics && !c.readChats){
+    gcsGate('אין הרשאה',
+      `לחשבון ${gcsUser.email} אין הרשאה לצפות בנתונים.\nפנה למנהל המערכת.`,
+      'התנתק',gcsLogout);
+    return;
+  }
+  gcsGate('טוען נתונים…','');
+  try{
+    const objs=[];
+    if(c.readMetrics) objs.push(...(await gcsListObjects(GCS_DIRS.metrics)).items);
+    if(c.readChats)   objs.push(...(await gcsListObjects(GCS_DIRS.chats)).items);
+    if(!objs.length){
+      gcsGate('אין עדיין נתונים','עדיין לא נשמרו לוגים. הם יופיעו כאן אחרי העדכון הראשון מ-Cloud Logging.',
+        'רענן',gcsAutoLoad);
+      return;
+    }
+    gcsUngate();
+    await gcsIngestObjects(objs, `${objs.length} קבצים מ-GCS`);
+  }catch(err){
+    gcsGate('הטעינה נכשלה',err.message,'נסה שוב',gcsAutoLoad);
+  }
+}
+
+// After "נקה": a reload button.
+function gcsAfterReset(){
+  if(!gcsGated() || !gcsUser) return;
+  gcsGate('הנתונים נוקו','','טען מחדש',gcsAutoLoad);
+}
+
+function gcsBoot(){
+  // No bucket, or opened as file://: the report has nowhere to load from.
+  if(!gcsGated()){ gcsGate('הדוח לא מוגדר',gcsConfigError()); return; }
+  $('btn-gcs').style.display='none';
+  gcsLoadGis().catch(()=>{});  // ready before the click, so the popup isn't blocked
+  if(gcsRestoreSession()) gcsStart();
+  else gcsGate('התחברות','כדי לצפות בנתונים יש להתחבר עם חשבון Google של הארגון.',
+               'התחבר עם Google',gcsLogin);
+}
+// After the whole script has run, so every declaration below exists.
+document.addEventListener('DOMContentLoaded', gcsBoot);
+
+const gcsViewers=(pol,role)=>{
+  const b=(pol.bindings||[]).find(x=>x.role===role && !x.condition);
+  return b ? (b.members||[]).slice().sort() : [];
+};
+
+async function gcsShowAccess(){
+  document.querySelectorAll('#gcs-dirs .seg').forEach(b=>b.classList.toggle('on',b.dataset.d==='access'));
+  $('gcs-list').style.display='none'; $('gcs-foot').style.display='none';
+  const panel=$('gcs-access'); panel.style.display='flex'; panel.innerHTML='';
+  gcsStatus('טוען הרשאות…');
+  try{
+    if(!gcsCaps.adminVerified){
+      let ok;
+      try{ ok=await gcsHoldsAdminRole(GCS_SCOPE_FC); }
+      catch(err){
+        throw new Error(/^403/.test(err.message)
+          ? `לא ניתן לאמת את תפקיד המנהל — לתפקיד ${GCS_ADMIN_ROLE_ID} חסרה ההרשאה storage.buckets.getIamPolicy.`
+          : err.message);
+      }
+      gcsCaps.admin=ok; gcsCaps.adminVerified=true;
+      if(!ok){
+        gcsApplyCaps();
+        throw new Error(`ניהול ההרשאות זמין רק למי שקיבל את התפקיד ${GCS_ADMIN_ROLE_ID}.`);
+      }
+    }
+    if(!gcsProjectId) throw new Error('לא ניתן לזהות את הפרויקט מתוך תפקיד המנהל.');
+    for(const which of GCS_MANAGED){
+      gcsPolicies[which]=await (await gcsFetch(`${gcsFolderIam(which)}?optionsRequestedPolicyVersion=3`,
+        {scope:GCS_SCOPE_FC})).json();
+    }
+    gcsStatus('');
+    gcsRenderAccess();
+  }catch(err){ gcsStatus(err.message,true); }
+}
+
+function gcsRenderAccess(){
+  $('gcs-access').innerHTML=GCS_MANAGED.map(which=>{
+    const members=gcsViewers(gcsPolicies[which]||{}, gcsReaderRole(which));
+    const rows=members.length ? members.map(m=>{
+      const id=m.replace(/^\w+:/,'');
+      return `<div class="acc-row"><span class="acc-id" dir="ltr">${esc(id)}</span>`+
+        `<button class="btn" onclick="gcsRevoke('${which}',${esc(JSON.stringify(m))})">הסר</button></div>`;
+    }).join('') : `<div class="acc-empty">לאף אחד אין גישת קריאה.</div>`;
+    return `<div class="acc-sec"><h4>${GCS_ACCESS_LABEL[which]} — מי יכול לקרוא</h4>`+
+      `<div class="acc-list">${rows}</div>`+
+      `<div class="gcs-row">`+
+        // Users only: the page checks the signed-in user's own grant, so a
+        // group grant would let GCS serve chats that the page won't show.
+        `<input id="acc-email-${which}" dir="ltr" placeholder="name@domain.com" `+
+          `onkeydown="if(event.key==='Enter')gcsGrant('${which}')"/>`+
+        `<button class="btn btn-primary" onclick="gcsGrant('${which}')">הוסף</button>`+
+      `</div></div>`;
+  }).join('');
+}
+
+// Always re-reads the policy first so the write carries a fresh etag; a
+// concurrent edit then fails cleanly instead of being overwritten.
+async function gcsEditViewers(which, edit){
+  const url=gcsFolderIam(which);
+  const pol=await (await gcsFetch(`${url}?optionsRequestedPolicyVersion=3`,{scope:GCS_SCOPE_FC})).json();
+  pol.bindings=pol.bindings||[];
+  const role=gcsReaderRole(which);
+  let b=pol.bindings.find(x=>x.role===role && !x.condition);
+  if(!b){ b={role, members:[]}; pol.bindings.push(b); }
+  b.members=edit(b.members||[]);
+  pol.bindings=pol.bindings.filter(x=>(x.members||[]).length);
+  try{
+    gcsPolicies[which]=await (await gcsFetch(url,{method:'PUT', scope:GCS_SCOPE_FC,
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(pol)})).json();
+  }catch(err){
+    if(/^(409|412)/.test(err.message)) throw new Error('ההרשאות שונו במקביל — טען מחדש ונסה שוב.');
+    throw err;
+  }
+}
+
+async function gcsGrant(which){
+  const email=$(`acc-email-${which}`).value.trim().toLowerCase();
+  if(!new RegExp('^'+EMAIL_RE.source+'$').test(email)){ gcsStatus('כתובת מייל לא תקינה.',true); return; }
+  const member=`user:${email}`;
+  gcsStatus('שומר…');
+  try{
+    await gcsEditViewers(which, ms=>ms.includes(member)?ms:ms.concat(member));
+    gcsRenderAccess();
+    gcsStatus(`✓ ${email} נוסף ל${GCS_ACCESS_LABEL[which]}. השינוי נכנס לתוקף תוך כמה דקות.`);
+  }catch(err){ gcsStatus(err.message,true); }
+}
+
+async function gcsRevoke(which, member){
+  if(!confirm(`להסיר את ${member.replace(/^\w+:/,'')} מ${GCS_ACCESS_LABEL[which]}?`)) return;
+  gcsStatus('שומר…');
+  try{
+    await gcsEditViewers(which, ms=>ms.filter(m=>m!==member));
+    gcsRenderAccess();
+    gcsStatus(`✓ הגישה הוסרה. השינוי נכנס לתוקף תוך כמה דקות.`);
+  }catch(err){ gcsStatus(err.message,true); }
+}
+
+// Status chip in the header: how the log sync went.
+function gcsUpState(kind, text, detail){
+  const el=$('gcs-up');
+  const color=kind==='err'?'var(--err)':kind==='ok'?'var(--ok)':'var(--muted)';
+  el.innerHTML=`<span style="font-size:12px;color:${color};cursor:default" title="${esc(detail||'')}">${esc(text)}</span>`;
 }
 
 function ingestText(raw, fname){
@@ -981,11 +1564,23 @@ function ingestText(raw, fname){
 }
 
 function finishLoad(){
-  // Drop exact duplicates — re-exports overlap constantly.
-  const seen=new Set();
+  // Drop exact duplicates — re-exports overlap constantly. The metrics and
+  // chats halves of a split upload share insertIds, so fold the twin's
+  // fields into the kept record instead of discarding its half.
+  const seen=new Map();
+  const blank=v=>v==null||v===''||v===0||v===false||(Array.isArray(v)&&!v.length);
   records=records.filter(r=>{
     const k=r.insertId || [r.kind,r.ts,r.convId,r.promptText,r.eventId].join('|');
-    if(seen.has(k)) return false; seen.add(k); return true;
+    const prev=seen.get(k);
+    if(!prev){ seen.set(k,r); return true; }
+    for(const f in r){
+      const a=prev[f], b=r[f];
+      if(blank(b)) continue;
+      // Longer string wins: a metrics row can surface a short verdict where
+      // the chats row has the real answer text.
+      if(blank(a) || (typeof a==='string' && typeof b==='string' && b.length>a.length)) prev[f]=b;
+    }
+    return false;
   });
   records.sort((a,b)=>a.ts-b.ts);
   collapseArmorDupes();
@@ -994,7 +1589,6 @@ function finishLoad(){
   resolveAttribution();
   collapseReplayChains();   // after armor is attached, so it merges too
   buildUsers();
-  $('upload-zone').style.display='none';
   $('controls').style.display='flex';
   $('kpi-row').style.display='grid';
   $('tabs').style.display='flex';
@@ -1632,9 +2226,8 @@ function resetAll(){
   ['file-info','custom-info','users-sub','safety-sub','act-sub'].forEach(id=>{
     const el=$(id); if(el) el.textContent=''; });
 
-  $('upload-zone').style.display='';
   ['controls','kpi-row','tabs','custom-panel'].forEach(id=>{const el=$(id); if(el) el.style.display='none';});
-  $('file-input').value='';
+  gcsAfterReset();
 }
 
 /* ═══ Charts ═══════════════════════════════════════════════ */

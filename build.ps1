@@ -4,7 +4,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $src  = Join-Path $root 'src'
-$out  = Join-Path $root 'gemini-enterprise-report.html'
+$out  = Join-Path $root 'index.html'
 
 $parts = @('head.html','vendor.html','style.css','body.html','app.js')
 

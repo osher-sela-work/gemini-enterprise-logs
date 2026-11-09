@@ -7,6 +7,33 @@
   <div id="loader-track"><div id="loader-bar"></div></div>
 </div>
 
+<div id="gcs-modal" onclick="if(event.target===this)closeGcs()">
+  <div class="card gcs-box">
+    <div class="card-hdr">
+      <h3>☁ טעינה מ-Google Cloud Storage</h3>
+      <span class="sub" id="gcs-who"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-icon" onclick="closeGcs()" title="סגור">✕</button>
+    </div>
+    <div class="card-body">
+      <div class="segs" id="gcs-dirs">
+        <button class="seg" data-d="metrics" onclick="gcsList('metrics')">📊 מדדים</button>
+        <button class="seg" data-d="chats"   onclick="gcsList('chats')">💬 שיחות</button>
+        <button class="seg" data-d="access"  onclick="gcsShowAccess()" id="gcs-admin-seg" style="display:none">🔐 הרשאות</button>
+      </div>
+      <div id="gcs-status"></div>
+      <div id="gcs-list"></div>
+      <div id="gcs-access"></div>
+      <div class="gcs-foot" id="gcs-foot">
+        <label><input type="checkbox" id="gcs-all" onchange="gcsToggleAll(this.checked)"/> בחר הכל</label>
+        <span id="gcs-count"></span>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="gcs-load" onclick="gcsLoad()" disabled>טען נבחרים</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <header>
   <div class="logo">
     <div class="logo-mark">✦</div>
@@ -17,25 +44,21 @@
   </div>
   <div class="hdr-btns">
     <button class="btn btn-icon" onclick="toggleTheme()" title="החלף ערכת נושא" id="btn-theme">🌙</button>
-    <button class="btn btn-icon" onclick="openHelp()" title="עזרה — איך להוציא את הלוגים">?</button>
-    <input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" onchange="handleFiles(this.files)"/>
-    <button class="btn" onclick="document.getElementById('file-input').click()">⬆ טעינת קבצים</button>
+    <span id="gcs-up"></span>
+    <button class="btn" id="btn-gcs" onclick="openGcs()" title="טעינה מ-Google Cloud Storage">☁ GCS</button>
     <button class="btn" onclick="exportViewCSV()">⬇ CSV</button>
     <button class="btn btn-primary" onclick="exportPNG()">↓ ייצוא PNG</button>
+    <span id="gcs-user"></span>
   </div>
 </header>
 
 <main>
 
-  <div id="upload-zone" onclick="document.getElementById('file-input').click()"
-       ondragover="dz(event,1)" ondragleave="dz(event,0)" ondrop="dzDrop(event)">
+  <div id="gate" class="card">
     <div style="font-size:36px;margin-bottom:12px">✦</div>
-    <h2>גרור לכאן את יומני ה-Gemini Enterprise</h2>
-    <p>ייצוא CSV/TSV מ-Cloud Logging (Log Explorer → Download)</p>
-    <div class="hint">
-      נתמכים: <b>gen_ai.client.inference.operation.details</b> (שיחות) · <b>ModelArmorAudit</b> (סינון בטיחות)<br>
-      אפשר להעלות כמה קבצים יחד — הם ימוזגו לפי מזהה שיחה.
-    </div>
+    <h2 id="gate-title"></h2>
+    <p id="gate-msg"></p>
+    <button class="btn btn-primary" id="gate-btn"></button>
   </div>
 
   <div id="controls">

@@ -34,14 +34,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 /* ── main ── */
 main{padding:22px 26px;max-width:1440px;margin:0 auto;}
 
-/* ── upload ── */
-#upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:52px 24px;
-  text-align:center;cursor:pointer;transition:.2s;background:var(--surface);}
-#upload-zone:hover,#upload-zone.drag{border-color:var(--gem);background:var(--surface2);}
-#upload-zone h2{font-size:17px;font-weight:600;margin-bottom:8px;}
-#upload-zone p{color:var(--muted);font-size:13px;}
-#upload-zone .hint{font-size:11px;color:var(--muted);opacity:.75;margin-top:16px;line-height:1.7;}
-#file-input,#snap-input{display:none;}
+#snap-input{display:none;}
 
 /* ── controls ── */
 #controls{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
@@ -196,4 +189,50 @@ footer{text-align:center;padding:22px;font-size:11px;color:var(--muted);opacity:
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #loader-track{width:280px;height:5px;background:var(--surface2);border-radius:4px;overflow:hidden;}
 #loader-bar{height:100%;width:0;background:linear-gradient(90deg,#8AB4F8,#AB47BC);transition:width .3s ease;}
+
+/* ── GCS picker ── */
+#gcs-modal{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.55);
+  align-items:center;justify-content:center;padding:16px;}
+#gcs-modal.on{display:flex;}
+.gcs-box{width:min(720px,100%);max-height:85vh;display:flex;flex-direction:column;}
+.gcs-box .card-body{display:flex;flex-direction:column;gap:10px;min-height:0;}
+.gcs-row{display:flex;gap:8px;flex-wrap:wrap;}
+.gcs-row input{flex:1;min-width:160px;padding:6px 10px;border-radius:8px;font-size:12px;
+  border:1px solid var(--border);background:var(--surface2);color:var(--text);}
+#gcs-status{font-size:12px;color:var(--muted);white-space:pre-line;}
+#gcs-status.err{color:var(--err);}
+#gcs-list{overflow:auto;min-height:0;border:1px solid var(--border);border-radius:8px;display:none;}
+#gcs-list label{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;cursor:pointer;
+  border-bottom:1px solid var(--border);direction:ltr;}
+#gcs-list label:last-child{border-bottom:none;}
+#gcs-list label:hover{background:var(--surface2);}
+#gcs-list .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#gcs-list .meta{color:var(--muted);font-size:11px;white-space:nowrap;}
+.gcs-foot{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted);}
+#gcs-dirs{align-self:flex-start;}
+
+/* ── sign-in gate ── */
+#gate{display:none;text-align:center;padding:52px 24px;}
+#gate.on{display:block;}
+#gate h2{font-size:17px;font-weight:600;margin-bottom:8px;}
+#gate p{color:var(--muted);font-size:13px;margin-bottom:18px;white-space:pre-line;}
+#gate-btn:empty{display:none;}
+/* While the gate is up (signing in, loading, no access) the page shows only
+   the gate: no report panels, no export/upload/help buttons. */
+body.gated main > :not(#gate),
+body.gated .hdr-btns > :not(#btn-theme):not(#gcs-user){display:none !important;}
+body.gated #gate{max-width:440px;margin:12vh auto 0;}
+#gcs-user{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);}
+#gcs-user:empty{display:none;}
+#gcs-access{display:none;flex-direction:column;gap:14px;overflow:auto;min-height:0;}
+.acc-sec{display:flex;flex-direction:column;gap:8px;}
+.acc-sec h4{font-size:13px;font-weight:600;}
+.acc-list{border:1px solid var(--border);border-radius:8px;}
+.acc-row{display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:12px;border-bottom:1px solid var(--border);}
+.acc-row:last-child{border-bottom:none;}
+.acc-id{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.acc-kind{font-size:11px;color:var(--muted);}
+.acc-empty{padding:8px 10px;font-size:12px;color:var(--muted);}
+.gcs-row select{padding:6px 8px;border-radius:8px;font-size:12px;
+  border:1px solid var(--border);background:var(--surface2);color:var(--text);}
 </style>
