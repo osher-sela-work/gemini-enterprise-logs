@@ -30,12 +30,14 @@ const DOMAINS = String(process.env.ALLOWED_DOMAIN || '').split(',').map(d => d.t
 const GE_APP = String(process.env.GE_APP || '').trim().replace(/"/g, '');
 const GEMINI = 'resource.type="discoveryengine.googleapis.com/Agent"' +
   ' OR log_id("discoveryengine.googleapis.com/gemini_enterprise_user_activity")';
-const NOTEBOOKLM = 'resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"';
+// All of NotebookLM's activity log: questions and notebooks (NotebookService) but also sources (SourceService).
+const NOTEBOOKLM = 'log_id("discoveryengine.googleapis.com/notebooklm_enterprise_user_activity")' +
+  ' OR resource.labels.service="google.cloud.notebooklm.v1main.NotebookService"';
 const ARMOR = 'resource.type="modelarmor.googleapis.com/SanitizeOperation"';
 const NLM_CHECK = 'labels."modelarmor.googleapis.com/client_correlation_id"=~"^NLM\\|"';
 const DEFAULT_FILTER = GE_APP
-  ? `((${GEMINI}) AND "${GE_APP}") OR ${NOTEBOOKLM} OR (${ARMOR} AND ("${GE_APP}" OR ${NLM_CHECK}))`
-  : `(${GEMINI}) OR ${NOTEBOOKLM} OR ${ARMOR}`;
+  ? `((${GEMINI}) AND "${GE_APP}") OR (${NOTEBOOKLM}) OR (${ARMOR} AND ("${GE_APP}" OR ${NLM_CHECK}))`
+  : `(${GEMINI}) OR (${NOTEBOOKLM}) OR ${ARMOR}`;
 const LOG_FILTER = process.env.LOG_FILTER || DEFAULT_FILTER;
 
 const auth = new GoogleAuth({

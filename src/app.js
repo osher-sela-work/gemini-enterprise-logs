@@ -444,8 +444,11 @@ function entryToRecord(e){
     'jsonPayload.sanitizationResult.sanitizationVerdictReason',
     'jsonPayload.response.sanitizationResult.sanitizationVerdictReason')||''));
 
+  // linkedUser: set by the sync on a NotebookLM Model Armor check, from the question with the same text
+  // (sync.js linkNotebookChecks), so the check has its user without the text in metrics/.
+  const linked = String(getAny(e,'linkedUser')||'').match(EMAIL_RE)?.[0]?.toLowerCase() || '';
   const email = String(getAny(e,'jsonPayload.userIamPrincipal')||'').match(EMAIL_RE)?.[0]?.toLowerCase()
-             || findEmail(e,0);
+             || linked || findEmail(e,0);
 
   const labels = get(e,'labels') || {};
   const corr = String(labels['modelarmor.googleapis.com/client_correlation_id']||'');
@@ -461,7 +464,7 @@ function entryToRecord(e){
     assistToken: String(getAny(e,'jsonPayload.assistToken','jsonPayload.response.assistToken')||''),
     // The chat a StreamAssist turn belongs to: …/sessions/<id>/assistAnswers/…
     session: (String(getAny(e,'jsonPayload.response.answer.name')||'').match(/\/sessions\/([^/]+)/)||[])[1]||'',
-    email, emailSrc: email?'direct':'',
+    email, emailSrc: !email ? '' : (linked && email===linked && !getAny(e,'jsonPayload.userIamPrincipal')) ? 'synced' : 'direct',
     // Which product the event came from — drives the UI badge and filters.
     product: kind==='notebooklm' ? 'NotebookLM'
            : /NLM\|/.test(corr) ? 'NotebookLM'
@@ -476,6 +479,11 @@ function entryToRecord(e){
     assistantId: String(getAny(e,'resource.labels.assistant_id')||''),
     location: String(getAny(e,'resource.labels.location')||''),
     severity: String(getAny(e,'severity')||'INFO').toUpperCase(),
+    failed: /^(ERROR|CRITICAL|ALERT|EMERGENCY)$/i.test(String(getAny(e,'severity'))) ||
+            !!Number(getAny(e,'jsonPayload.status.code')),
+    // NotebookLM's BatchCreateSources: the titles of the sources added.
+    sourceTitles: (()=>{ const s=jsonOr(get(e,'jsonPayload.response.sources'),[]);
+      return (Array.isArray(s)?s:[]).map(x=>fixText(String((x&&x.title)||''))).filter(Boolean); })(),
     notebookId: nbMatch?nbMatch[1]:'',
     notebookPath,
     method, correlationId: corr, armorOp, opType, responseText,
@@ -850,8 +858,9 @@ function gcsApplyCaps(){
   document.querySelector('#gcs-dirs [data-d="metrics"]').style.display=c.readMetrics?'':'none';
   document.querySelector('#gcs-dirs [data-d="chats"]').style.display=c.readChats?'':'none';
   // Without chats access the chat history is metrics rows only: a list of empty chats. Hide the tab.
-  document.querySelector('.tab[data-v="chat"]').style.display=c.readChats?'':'none';
-  if(!c.readChats && view==='chat') view='users';
+  // The same for the flagged questions: they are prompt text, which lives in chats/.
+  ['chat','safety'].forEach(v=>{ document.querySelector(`.tab[data-v="${v}"]`).style.display=c.readChats?'':'none'; });
+  if(!c.readChats && (view==='chat' || view==='safety')) view='users';
   $('gcs-admin-seg').style.display=c.admin?'':'none';
   $('gcs-user').innerHTML=gcsUser
     ? `<span dir="ltr">${esc(gcsUser.email)}</span>`+
@@ -1307,7 +1316,9 @@ function linkArmorByText(){
     const k=normText(c.promptText);
     (byText[k]=byText[k]||[]).push(c);
   });
-  records.filter(r=>r.kind==='armor' && !r.email).forEach(a=>{
+  // A check the sync already linked ('synced') is matched again when the text is here, so its
+  // question is marked in the notebook too; without chats/ it keeps the sync's user.
+  records.filter(r=>r.kind==='armor' && (!r.email || r.emailSrc==='synced')).forEach(a=>{
     const cands=byText[normText(a.promptText)];
     if(!cands||!cands.length) return;
     let best=null, gap=Infinity;
@@ -1562,11 +1573,13 @@ const NB_ACTIONS = {
   DeleteNotebook:  {label:'מחברת נמחקה',    icon:'🗑'},
   UpdateNotebook:  {label:'מחברת עודכנה',   icon:'✏️'},
   ListNotebooks:   {label:'רשימת מחברות',   icon:'📚'},
+  BatchCreateSources:{label:'מקור נוסף',    icon:'📎'},
   CreateSource:    {label:'מקור נוסף',      icon:'📎'},
   UploadSource:    {label:'מקור הועלה',     icon:'📎'},
   DeleteSource:    {label:'מקור הוסר',      icon:'📎'},
 };
-const nbAction = m => NB_ACTIONS[m] || null;
+// An action the list doesn't know is still shown, by its method name, rather than dropped.
+const nbAction = m => NB_ACTIONS[m] || (m ? {label:m, icon:'•'} : null);
 
 function notebookThreads(){
   const byKey={};
@@ -1588,7 +1601,10 @@ function notebookThreads(){
       const act=nbAction(r.method);
       if(act){
         t.actions.push({method:r.method, ts:r.ts});
-        t.msgs.push({kind:'action', ts:r.ts, label:act.label, icon:act.icon});
+        // A source's title comes with the chats file; a failed call is marked as such.
+        const label=act.label + (r.sourceTitles.length ? ': '+r.sourceTitles.join(', ') : '')
+                              + (r.failed ? ' — נכשל' : '');
+        t.msgs.push({kind:'action', ts:r.ts, label, icon:act.icon});
       }
       return;                       // no question was asked in this record
     }

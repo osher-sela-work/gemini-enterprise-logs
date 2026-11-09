@@ -28,6 +28,7 @@ const TEXT_PREFIXES = [
   'jsonpayload.servicetextreply',
   'jsonpayload.sanitizationinput',
   'jsonpayload.response',              // NotebookLM answer body
+  'jsonpayload.status.message',        // a failed call's error, which quotes the request (e.g. a source's URL)
 ];
 // …except the Model Armor verdict, which lives under response but isn't text.
 const TEXT_EXCEPTIONS = ['jsonpayload.response.sanitizationresult'];
@@ -95,6 +96,39 @@ function splitEntries(entries) {
     rows: rows.length,
     chatRows: chatRows.length,
   };
+}
+
+// ---- NotebookLM's Model Armor checks → their user ----
+
+// A NotebookLM Model Armor check names no user, and nothing but its text ties it to the question it checked, which
+// does (notebooklm_enterprise_user_activity: request.userQuery, userIamPrincipal). The text goes to chats/ only, so
+// without chats access the report couldn't make that match. The sync can, while it holds both: it adds the
+// question's user to the check as `linkedUser` (an email, which metrics/ holds anyway), the nearest in time within
+// 10 minutes. Entries are changed in place.
+const LINK_MS = 10 * 60 * 1000;
+const normText = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+function linkNotebookChecks(entries) {
+  const questions = {};
+  for (const e of entries) {
+    const p = e.jsonPayload || {};
+    if (!/notebooklm_enterprise_user_activity/.test(e.logName || '') || !p.userIamPrincipal || !p.request?.userQuery) continue;
+    (questions[normText(p.request.userQuery)] ||= []).push({ email: p.userIamPrincipal, ts: Date.parse(e.timestamp) });
+  }
+  let linked = 0;
+  for (const e of entries) {
+    const p = e.jsonPayload || {};
+    const corr = String(e.labels?.['modelarmor.googleapis.com/client_correlation_id'] || '');
+    if (!/SanitizeOperationLogEntry/.test(p['@type'] || '') || p.operationType !== 'SANITIZE_USER_PROMPT') continue;
+    if (!corr.startsWith('NLM|') || p.userIamPrincipal) continue;
+    const ts = Date.parse(e.timestamp);
+    let best = null;
+    for (const q of questions[normText(p.sanitizationInput?.text)] || []) {
+      const gap = Math.abs(q.ts - ts);
+      if (gap <= LINK_MS && (!best || gap < best.gap)) best = { ...q, gap };
+    }
+    if (best) { e.linkedUser = best.email; linked++; }
+  }
+  return linked;
 }
 
 // ---- Times in object names ----
@@ -169,6 +203,7 @@ async function sync({ request, project, bucket, filter, now = Date.now(), wait =
   const result = { from: new Date(from).toISOString(), to: new Date(to).toISOString(), entries: entries.length, chatRows: 0 };
   if (entries.length) {
     const base = `auto-${stamp(from)}_${stamp(to)}.csv`;
+    linkNotebookChecks(entries);
     const parts = splitEntries(entries);
     // Chats first: if metrics then fails, the restricted half is the one already in place, never the other way round.
     if (parts.chats) await create(request, bucket, DIRS.chats + base, parts.chats, 'text/csv');
@@ -192,4 +227,4 @@ async function recordAccess({ request, bucket, viewer, viewed, reason, now = Dat
   return { name, ...entry };
 }
 
-module.exports = { sync, recordAccess, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR, ACCESS_DIR };
+module.exports = { sync, recordAccess, linkNotebookChecks, splitEntries, flatten, isText, stamp, unstamp, SYNC_DIR, ACCESS_DIR };
