@@ -227,6 +227,9 @@ footer{text-align:center;padding:22px;font-size:11px;color:var(--muted);opacity:
 #gate h2{font-size:17px;font-weight:600;margin-bottom:8px;}
 #gate p{color:var(--muted);font-size:13px;margin-bottom:18px;white-space:pre-line;}
 #gate-btn:empty{display:none;}
+/* Loading a local file needs no sign-in: offered under the sign-in button. */
+.gate-local{margin-top:22px;padding-top:16px;border-top:1px solid var(--border);}
+#gate .gate-local p{font-size:11px;margin:8px 0 0;}
 /* While the gate is up (signing in, loading, no access) the page shows only
    the gate: no report panels, no export/upload/help buttons. */
 body.gated main > :not(#gate),

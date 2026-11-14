@@ -1091,7 +1091,9 @@ function gcsUpState(kind, text, detail){
 function handleFiles(files){
   const list=Array.from(files||[]);
   $('file-input').value='';
-  if(!list.length || document.body.classList.contains('gated')) return;
+  if(!list.length) return;
+  // No sign-in needed: from the sign-in screen, the report opens with just this file.
+  if(document.body.classList.contains('gated')) gcsUngate();
   showLoader(list.length===1?list[0].name:`${list.length} קבצים`);
   let done=0;
   const step=()=>{ done++; setProgress(10+80*done/list.length); if(done===list.length) finishLoad(); };
@@ -2367,7 +2369,9 @@ function renderThread(){
     $('thread').innerHTML='<div class="empty">בחר משתמש כדי לראות את היסטוריית השיחות</div>';
     return;
   }
-  if(!isOwnChats(chatUser) && !accessGranted.has(chatUser)){ renderAccessGate(); return; }
+  // Signed in, the data is the bucket's: someone else's chats need a reason. Not signed in, the only data is
+  // a file the viewer loaded from their own computer, so there is nothing to ask a reason for (or to save it).
+  if(gcsUser && !isOwnChats(chatUser) && !accessGranted.has(chatUser)){ renderAccessGate(); return; }
   if(!chatConv || !cs.some(c=>c.id===chatConv)) chatConv=cs[0].id;
 
   // Number the real conversations 1..n oldest-first; blocked-only entries are
