@@ -423,10 +423,12 @@ function entryToRecord(e){
   // present in the export but always empty. It arrives as concatenated
   // streaming snapshots, so collapse it back to the final pass.
   let answer=String(getAny(e,'jsonPayload.serviceTextReply')||'');
-  if(!answer){
+  // Only NotebookLM's answer can sit elsewhere under response; elsewhere the longest string there is an id
+  // (an agent's or answer's resource name), which would show as the answer.
+  if(!answer && isNotebook){
     (function deepest(node,d){
       if(d>4||node==null) return;
-      if(typeof node==='string'){ if(node.length>answer.length) answer=node; return; }
+      if(typeof node==='string'){ if(node.length>answer.length && !/^projects\//.test(node)) answer=node; return; }
       if(typeof node==='object') Object.values(node).forEach(v=>deepest(v,(d||0)+1));
     })(get(e,'jsonPayload.response'),0);
   }
@@ -477,6 +479,9 @@ function entryToRecord(e){
       return (Array.isArray(parts)?parts:[]).map(x=>x&&x.text||'').join(' ').trim()
         || String(getAny(e,'jsonPayload.request.query.text','jsonPayload.request.userQuery')||'');
     })()),
+    // Which agent answered a StreamAssist turn (the agent builder, a custom agent…), when chats/ is loaded.
+    assistAgent: String(getAny(e,'jsonPayload.response.agentInfo.displayName','jsonPayload.response.agentInfo.agent')||'')
+                   .split('/').pop(),
     // The chat a StreamAssist turn belongs to: …/sessions/<id>/assistAnswers/…
     session: (String(getAny(e,'jsonPayload.response.answer.name')||'').match(/\/sessions\/([^/]+)/)||[])[1]||'',
     email, emailSrc: !email ? '' : (linked && email===linked && !getAny(e,'jsonPayload.userIamPrincipal')) ? 'synced' : 'direct',
@@ -1243,8 +1248,45 @@ function buildConversations(){
       armor: [],           // ModelArmor hits joined to this conversation
     };
   });
+  convs=convs.concat(assistOnlyChats());
   // NotebookLM threads live alongside conversations in every view.
   convs=convs.concat(notebookThreads()).sort((a,b)=>b.lastTs-a.lastTs);
+}
+
+/* Chats that only StreamAssist logged. Some turns write no gen_ai row at all —
+   a Gemini Enterprise agent such as the one that builds agents — so the chat
+   wasn't anywhere, though it counted in the stats. The StreamAssist row holds
+   the question and the answer itself; a session's rows are one chat. A session
+   any of whose turns is in a gen_ai conversation is left to that one. Without
+   chats/ there is no text, and nothing to show.                             */
+function assistOnlyChats(){
+  const covered=new Set(); convs.forEach(c=>(c.traces||[]).forEach(t=>covered.add(t)));
+  const bySession={};
+  records.filter(r=>r.question && r.kind!=='inference' && r.product!=='NotebookLM').forEach(r=>{
+    const k=r.statsChat||r.insertId; (bySession[k]=bySession[k]||[]).push(r);
+  });
+  const out=[];
+  Object.entries(bySession).forEach(([k,rs])=>{
+    if(rs.some(r=>r.trace && covered.has(r.trace))) return;
+    rs.sort((a,b)=>a.ts-b.ts);
+    const msgs=[];
+    rs.forEach(r=>{
+      if(r.askText) msgs.push({kind:'text', role:'user', text:r.askText, ts:r.ts});
+      if(r.answer)  msgs.push({kind:'text', role:'assistant', text:r.answer, ts:r.ts});
+    });
+    const prompts=msgs.filter(m=>m.role==='user');
+    if(!prompts.length) return;
+    const who=rs.find(r=>r.email);
+    out.push({
+      id:'sa:'+k, email:who?who.email:'', emailSrc:who?'direct':'',
+      session:rs[0].statsChat||'', traces:rs.map(r=>r.trace).filter(Boolean),
+      firstTs:rs[0].ts, lastTs:rs[rs.length-1].ts,
+      agent:rs.map(r=>r.assistAgent).find(Boolean)||'', engineId:'',
+      turns:prompts.length, tokens:0, errored:rs.some(r=>r.failed),
+      msgs, prompts, sources:[], recCount:rs.length, product:'Gemini Enterprise', armor:[],
+    });
+  });
+  return out;
 }
 
 // Assistant replies stream as many one-word message objects; merge those
