@@ -46,6 +46,9 @@
     <button class="btn btn-icon" onclick="toggleTheme()" title="החלף ערכת נושא" id="btn-theme">🌙</button>
     <span id="gcs-up"></span>
     <button class="btn" id="btn-gcs" onclick="openGcs()" title="טעינה מ-Google Cloud Storage">☁ GCS</button>
+    <input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" onchange="handleFiles(this.files)"/>
+    <button class="btn" onclick="document.getElementById('file-input').click()"
+      title="הוספת ייצוא מ-Logs Explorer (CSV/JSON) לדוח. רק בדפדפן שלך — שום דבר לא נשמר">⬆ טעינת CSV</button>
     <button class="btn" onclick="exportViewCSV()">⬇ CSV</button>
     <button class="btn btn-primary" onclick="exportPNG()">↓ ייצוא PNG</button>
     <span id="gcs-user"></span>

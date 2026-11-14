@@ -89,7 +89,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 /* ── main ── */
 main{padding:22px 26px;max-width:1440px;margin:0 auto;}
 
-#snap-input{display:none;}
+#snap-input,#file-input{display:none;}
 
 /* ── controls ── */
 #controls{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
@@ -349,6 +349,9 @@ body.gated #gate{max-width:440px;margin:12vh auto 0;}
     <button class="btn btn-icon" onclick="toggleTheme()" title="החלף ערכת נושא" id="btn-theme">🌙</button>
     <span id="gcs-up"></span>
     <button class="btn" id="btn-gcs" onclick="openGcs()" title="טעינה מ-Google Cloud Storage">☁ GCS</button>
+    <input id="file-input" type="file" multiple accept=".csv,.tsv,.txt,.json" onchange="handleFiles(this.files)"/>
+    <button class="btn" onclick="document.getElementById('file-input').click()"
+      title="הוספת ייצוא מ-Logs Explorer (CSV/JSON) לדוח. רק בדפדפן שלך — שום דבר לא נשמר">⬆ טעינת CSV</button>
     <button class="btn" onclick="exportViewCSV()">⬇ CSV</button>
     <button class="btn btn-primary" onclick="exportPNG()">↓ ייצוא PNG</button>
     <span id="gcs-user"></span>
@@ -945,8 +948,13 @@ function entryToRecord(e){
     // A StreamAssist turn's id; its Model Armor checks end their client_correlation_id with it.
     assistToken: String(getAny(e,'jsonPayload.assistToken','jsonPayload.response.assistToken')||''),
     // The sync's stats columns (sync.js addStats): one question asked, its chat, and whether it was flagged.
-    question: Number(getAny(e,'stats.question'))===1,
-    statsChat: String(getAny(e,'stats.chat')||''),
+    // A file without them (a manual export) gives the same from the row itself: what addStats looks at.
+    question: Number(getAny(e,'stats.question'))===1 || method==='StreamAssist' ||
+              String(getAny(e,'resource.labels.method'))==='StreamAssist' ||
+              (isNotebook && /^GenerateFreeForm/.test(method)),
+    statsChat: String(getAny(e,'stats.chat')||'') ||
+               (String(getAny(e,'jsonPayload.response.answer.name')||'').match(/\/sessions\/([^/]+)/)||[])[1] ||
+               (isNotebook ? (nbMatch?nbMatch[1]:'') : ''),
     statsFlagged: Number(getAny(e,'stats.flagged'))===1,
     // What was asked, when chats/ is loaded: a StreamAssist query's text, or NotebookLM's userQuery.
     askText: fixText((()=>{
@@ -1561,6 +1569,34 @@ function gcsUpState(kind, text, detail){
   el.innerHTML=`<span style="font-size:12px;color:${color};cursor:default" title="${esc(detail||'')}">${esc(text)}</span>`;
 }
 
+/* ── Manual files ─────────────────────────────────────────────
+   A Logs Explorer export (CSV or JSON), picked with "⬆ טעינת CSV" or dropped on
+   the page, is added to what the report already shows. It is read in this
+   browser only: nothing is uploaded or saved, and a reload drops it.        */
+function handleFiles(files){
+  const list=Array.from(files||[]);
+  $('file-input').value='';
+  if(!list.length || document.body.classList.contains('gated')) return;
+  showLoader(list.length===1?list[0].name:`${list.length} קבצים`);
+  let done=0;
+  const step=()=>{ done++; setProgress(10+80*done/list.length); if(done===list.length) finishLoad(); };
+  list.forEach(f=>{
+    const r=new FileReader();
+    r.onerror=()=>{ parseWarnings.push(`${f.name}: לא ניתן לקרוא את הקובץ`); step(); };
+    r.onload=e=>{
+      try{ ingestText(String(e.target.result||''), f.name); }
+      catch(err){ parseWarnings.push(`${f.name}: ${err.message}`); }
+      step();
+    };
+    r.readAsText(f,'utf-8');
+  });
+}
+document.addEventListener('dragover', e=>{ if(e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+document.addEventListener('drop', e=>{
+  if(!e.dataTransfer || !e.dataTransfer.files.length) return;
+  e.preventDefault(); handleFiles(e.dataTransfer.files);
+});
+
 function ingestText(raw, fname){
   const text=raw.replace(/^﻿/,'').replace(/\r\n?/g,'\n').trim();
   if(!text) return;
@@ -1678,6 +1714,7 @@ function buildConversations(){
       email: ownEmail(c.recs.find(ownEmail) || {}),
       emailSrc: c.recs.find(ownEmail) ? 'direct' : '',
       session: c.recs.map(r=>traceSession[r.trace]).find(Boolean) || '',
+      traces: c.recs.map(r=>r.trace).filter(Boolean),
       firstTs: c.recs[0].ts, lastTs: last.ts,
       agent: best.agentName||'', engineId: best.engineId||'',
       turns: prompts.length,
@@ -1982,6 +2019,7 @@ function collapseReplayChains(){
 
       if(host.email===UNATTRIBUTED && c.email!==UNATTRIBUTED){ host.email=c.email; host.emailSrc=c.emailSrc; }
       host.session=host.session||c.session;
+      host.traces=[...(host.traces||[]), ...(c.traces||[])];
       host.firstTs=Math.min(host.firstTs,c.firstTs);
       host.lastTs =Math.max(host.lastTs, c.lastTs);
       host.recCount+=c.recCount;
@@ -2236,12 +2274,37 @@ const statsMode=()=>records.some(r=>r.question);
 function statEvents(){
   const traceAgent={};
   records.forEach(r=>{ if(r.kind==='inference' && r.trace && r.agentName) traceAgent[r.trace]=r.agentName; });
-  return records.filter(r=>r.question && inWin(r.ts) && prodOn(r.product)).map(r=>({
+  // A Model Armor check's token (end of its client_correlation_id), for the checks that flagged.
+  const tokensOf=a=>(a.correlationIds&&a.correlationIds.length?a.correlationIds:[a.correlationId])
+    .filter(Boolean).map(id=>String(id).split('|').pop());
+  const flaggedTokens=new Set();
+  records.forEach(r=>{ if(r.kind==='armor' && r.armorOp!=='response' && (r.matched||r.blocked)) tokensOf(r).forEach(t=>flaggedTokens.add(t)); });
+  const qs=records.filter(r=>r.question);
+  const out=qs.filter(r=>inWin(r.ts) && prodOn(r.product)).map(r=>({
     ts:r.ts, email:r.email||UNATTRIBUTED,
     agent: r.product==='NotebookLM' ? 'NotebookLM' : (traceAgent[r.trace]||'(ללא)'),
     conv: r.product+'|'+(r.statsChat||r.insertId), product:r.product,
-    text:r.askText, flagged:r.statsFlagged, approxTs:false,
-  })).sort((a,b)=>a.ts-b.ts);
+    text:r.askText,
+    // From the sync's column, or the same joins done here for a manual file.
+    flagged: r.statsFlagged || flaggedTokens.has(r.assistToken) ||
+             !!(r.blockedBy && (r.blockedBy.matched||r.blockedBy.blocked)),
+    approxTs:false,
+  }));
+  /* Gemini Enterprise chats with no question row — a manual export without the
+     StreamAssist rows — are counted from their text, as before. NotebookLM's
+     questions are question rows themselves.                                 */
+  const qTraces=new Set(qs.map(r=>r.trace).filter(Boolean));
+  const qTokens=new Set(qs.map(r=>r.assistToken).filter(Boolean));
+  winConvs().forEach(c=>{
+    if(c.product==='NotebookLM') return;
+    if(c.blockedOnly){
+      const a=c.armor[0];
+      if(!a || a.emailSrc==='synced' || tokensOf(a).some(t=>qTokens.has(t))) return;
+    } else if((c.traces||[]).some(t=>qTraces.has(t))) return;
+    c.prompts.forEach(p=>out.push({ts:p.ts||c.firstTs, email:c.email, agent:c.agent||'(ללא)', conv:c.id,
+      product:c.product||'Gemini Enterprise', text:p.text, flagged:!!p.blocked, approxTs:!p.ts}));
+  });
+  return out.sort((a,b)=>a.ts-b.ts);
 }
 // Per user in the time window: questions asked, chats, first and last.
 function userCounts(){

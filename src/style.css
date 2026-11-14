@@ -34,7 +34,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 /* ── main ── */
 main{padding:22px 26px;max-width:1440px;margin:0 auto;}
 
-#snap-input{display:none;}
+#snap-input,#file-input{display:none;}
 
 /* ── controls ── */
 #controls{display:none;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
